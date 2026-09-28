@@ -4,8 +4,11 @@ import { useEffect, useState } from "react";
 
 /** Live IST clock. Top bar shows HH:MM IST; status bar shows HH:MM:SS IST. */
 export function Clock({ seconds = false, className = "clock" }: { seconds?: boolean; className?: string }) {
-  const [now, setNow] = useState(() => new Date());
+  // Render nothing until mounted: the server snapshot would always be a
+  // second (or more) stale by hydration time, causing a hydration mismatch.
+  const [now, setNow] = useState<Date | null>(null);
   useEffect(() => {
+    setNow(new Date());
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
@@ -18,7 +21,7 @@ export function Clock({ seconds = false, className = "clock" }: { seconds?: bool
   });
   return (
     <span className={className}>
-      {fmt.format(now)} IST
+      {now ? `${fmt.format(now)} IST` : "—"}
     </span>
   );
 }

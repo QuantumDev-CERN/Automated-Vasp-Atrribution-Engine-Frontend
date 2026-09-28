@@ -1,10 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { PathHops } from "@/components/workbench/PathHops";
-import { Empty, Unavailable } from "@/components/state";
+import { Empty } from "@/components/state";
 import { shortAddr, fmtDate } from "@/lib/format";
-import type { CaseRec } from "@/lib/api/cases";
+import type { CaseRec, CaseLatest } from "@/lib/api/cases";
+import type { FilingRec } from "@/lib/api/filings";
 import type { GraphPath, CaseLinks, InfraPivot } from "@/lib/api/graph";
 import type { Outcome } from "@/lib/api/feedback";
 
@@ -14,12 +16,13 @@ type Tab = (typeof TABS)[number];
 type Props = {
   initialTab: string;
   caseRec: CaseRec;
+  latest: CaseLatest | null;
   path: GraphPath | null;
   links: CaseLinks | null;
   infra: InfraPivot | null;
   infraTag: string | null;
   outcomes: Outcome[] | null;
-  filing: Record<string, unknown> | null;
+  filings: FilingRec[] | null;
   submitOutcome: (formData: FormData) => void;
   saved: boolean;
   formError?: string;
@@ -54,7 +57,9 @@ const radioRow: React.CSSProperties = { display: "flex", alignItems: "center", g
 
 export function CaseDetailTabs(props: Props) {
   const [tab, setTab] = useState<Tab>(TABS.includes(props.initialTab as Tab) ? (props.initialTab as Tab) : "overview");
-  const { caseRec } = props;
+  const { caseRec, latest } = props;
+  const summary = latest?.report ?? null;
+  const cert = latest?.certificate ?? null;
 
   return (
     <div>
@@ -85,22 +90,46 @@ export function CaseDetailTabs(props: Props) {
                 <Kv rows={[
                   ["Subject", <span className="mono">{shortAddr(props.path.subject)}</span>],
                   ["Terminal", <span className="mono" title={props.path.terminal}>{shortAddr(props.path.terminal)}</span>],
+                  ["Terminal reason", summary?.terminal_reason ? <span style={{ textTransform: "capitalize" }}>{summary.terminal_reason.replace(/-/g, " ")}</span> : "—"],
                   ["Hops", String(props.path.hops.length)],
                 ]} />
               ) : (
                 <Empty title="No traced path yet" hint="Run a trace from the button above; the subject → terminal trail appears here." />
               )}
-              <div style={{ marginTop: 16 }}>
-                <Unavailable endpoint="GET /cases/{case_id}/latest" what="Mixer correlation, threat intel, instrument routing and scores" />
-              </div>
             </Card>
           </div>
           <div>
-            <Card title="Scores">
-              <Unavailable endpoint="GET /cases/{case_id}/latest" what="Confidence and risk scores" />
+            <Card title="Scores" endpoint="GET /cases/{case_id}/latest">
+              {summary ? (
+                <Kv rows={[
+                  ["Risk", summary.risk_score === null || summary.risk_score === undefined
+                    ? "—"
+                    : `${summary.risk_score}${summary.risk_level ? ` (${summary.risk_level})` : ""}`],
+                  ["Confidence", summary.confidence === null || summary.confidence === undefined
+                    ? "—" : summary.confidence.toFixed(2)],
+                  ["Hops", summary.hop_count === null || summary.hop_count === undefined ? "—" : String(summary.hop_count)],
+                  ["Webhook", summary.webhook_status ? <span style={{ textTransform: "capitalize" }}>{summary.webhook_status}</span> : "—"],
+                ]} />
+              ) : (
+                <Empty title="No scores yet" hint="Scores appear once a trace completes for this case." />
+              )}
             </Card>
-            <Card title="Report & certificate">
-              <Unavailable endpoint="GET /cases/{case_id}/latest" what="Report reference, SHA-256 and coverage" />
+            <Card title="Report & certificate" endpoint="GET /cases/{case_id}/latest">
+              {summary && cert ? (
+                <>
+                  <Kv rows={[
+                    ["Report hash", <span className="mono" title={cert.report_hash} style={{ fontSize: 11 }}>{shortAddr(cert.report_hash)}</span>],
+                    ["Inputs hash", <span className="mono" title={cert.inputs_hash} style={{ fontSize: 11 }}>{shortAddr(cert.inputs_hash)}</span>],
+                    ["Engine", <span className="mono">{cert.engine_version}</span>],
+                    ["Generated", fmtDate(cert.generated_at)],
+                  ]} />
+                  <div style={{ marginTop: 12 }}>
+                    <Link href={`/reports/${summary.report_id}`} className="btn-secondary">Open full report</Link>
+                  </div>
+                </>
+              ) : (
+                <Empty title="No report yet" hint="The report and its SHA-256 certificate appear once a trace completes." />
+              )}
             </Card>
           </div>
         </div>
@@ -157,11 +186,37 @@ export function CaseDetailTabs(props: Props) {
       )}
 
       {tab === "filings" && (
-        <Card title="Filings for this case" endpoint=":8091 GET /sahyog/cases/{case_id}" wide>
-          {props.filing ? (
-            <Kv rows={Object.entries(props.filing).map(([k, v]) => [k, <span className="mono" key={k}>{String(v)}</span>] as [string, React.ReactNode])} />
+        <Card title="Filings for this case" endpoint="GET /filings?case_id={case_id}" wide>
+          {props.filings === null ? (
+            <Empty title="Could not load filings" hint="The filings API did not respond." />
+          ) : props.filings.length ? (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Filing</th><th>Status</th><th>Attempts</th><th>Filed</th><th>Error</th>
+                  <th className="cell-end">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {props.filings.map((f) => (
+                  <tr key={f.filing_id}>
+                    <td className="t-ink mono" title={f.filing_id}>{f.filing_id.slice(0, 8)}</td>
+                    <td style={{ textTransform: "capitalize" }}>{f.status}</td>
+                    <td className="t-num">{f.attempts}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{fmtDate(f.filed_at)}</td>
+                    <td style={{ fontSize: 11, color: "var(--tertiary)", maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }}
+                      title={f.error ?? ""}>
+                      {f.error || "—"}
+                    </td>
+                    <td className="cell-end">
+                      <Link href={`/filings/${f.filing_id}`}>View</Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           ) : (
-            <Empty title="No filing in the SAHYOG mock for this case" hint="The mock only holds cases submitted through it in this session. The durable registry needs GET /filings (see docs/BACKEND-NEEDS.md)." />
+            <Empty title="No filings for this case" hint="A filing is recorded each time an attribution package is delivered to SAHYOG." />
           )}
         </Card>
       )}

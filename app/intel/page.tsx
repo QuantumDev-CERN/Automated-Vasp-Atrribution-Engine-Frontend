@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Chrome } from "@/components/chrome/Chrome";
-import { PageError, Empty, Unavailable } from "@/components/state";
-import { getCaseLinks } from "@/lib/api/graph";
+import { PageError, Empty } from "@/components/state";
+import { getCaseLinks, getRankedIntel } from "@/lib/api/graph";
 import { getCalibration } from "@/lib/api/feedback";
 import { ApiError } from "@/lib/api/server";
 import { shortAddr } from "@/lib/format";
@@ -23,7 +23,13 @@ function relationship(tags: string[]): string {
 export default async function IntelPage({ searchParams }: { searchParams: Promise<{ case?: string }> }) {
   const { case: caseIdRaw } = await searchParams;
   const caseId = (caseIdRaw ?? "").trim();
-  const calibration = await getCalibration().catch(() => null);
+  const [calibrationR, rankedR] = await Promise.allSettled([
+    getCalibration(),
+    getRankedIntel(50),
+  ]);
+  const calibration = calibrationR.status === "fulfilled" ? calibrationR.value : null;
+  const ranked = rankedR.status === "fulfilled" ? rankedR.value : null;
+  const rankedError = rankedR.status === "rejected" ? rankedR.reason : null;
 
   return (
     <Chrome crumb="Intelligence">
@@ -50,9 +56,53 @@ export default async function IntelPage({ searchParams }: { searchParams: Promis
       <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 40, marginTop: 32 }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-            <span className="section-label">Ranked intelligence feed</span>
+            <span className="section-label">
+              Ranked intelligence feed{ranked ? ` · ${ranked.total_tags} tags` : ""}
+            </span>
+            <span className="endpoint-chip">GET /intel/links/ranked</span>
           </div>
-          <Unavailable endpoint="GET /intel/links/ranked" what="Global ranked intelligence feed" />
+          {ranked ? (
+            ranked.ranked.length ? (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Tag</th><th>Addresses</th><th>Cases</th><th>Sample addresses</th><th>Linked cases</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ranked.ranked.map((e) => (
+                    <tr key={e.tag}>
+                      <td className="t-ink mono">{e.tag}</td>
+                      <td className="t-num">{e.address_count}</td>
+                      <td className="t-num">{e.case_count}</td>
+                      <td className="mono" style={{ fontSize: 11 }}>
+                        {e.addresses.slice(0, 3).map((a) => (
+                          <div key={`${a.chain}:${a.address}`} title={a.address}>
+                            {shortAddr(a.address)} <span style={{ color: "var(--tertiary)" }}>{a.chain}</span>
+                          </div>
+                        ))}
+                      </td>
+                      <td className="mono" style={{ fontSize: 11 }}>
+                        {e.cases.slice(0, 3).map((c) => (
+                          <div key={c}>
+                            <Link href={`/cases/${c}`}>{c.slice(0, 8)}</Link>
+                          </div>
+                        ))}
+                        {e.cases.length === 0 ? "—" : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <Empty title="No intelligence tags yet" hint="Tags appear here once the engine traces cases and annotates addresses." />
+            )
+          ) : (
+            <PageError title="Could not load ranked intelligence feed" error={rankedError} />
+          )}
+          <p style={{ fontSize: 11, color: "var(--tertiary)", marginTop: 8 }}>
+            Only tags assigned by the engine itself are listed — nothing is invented to fill this feed.
+          </p>
         </div>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>

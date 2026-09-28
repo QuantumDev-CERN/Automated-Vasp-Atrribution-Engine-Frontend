@@ -2,7 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { Chrome } from "@/components/chrome/Chrome";
 import { PageError } from "@/components/state";
 import { WatchDetailTabs } from "@/components/watch/WatchDetailTabs";
-import { getWatch, listAlerts, setWatchStatus, removeWatch, checkWatchNow } from "@/lib/api/watchlist";
+import { getWatch, listChecks, setWatchStatus, removeWatch, checkWatchNow, setAlertDisposition, type Disposition } from "@/lib/api/watchlist";
 import { ApiError } from "@/lib/api/server";
 import { shortAddr } from "@/lib/format";
 
@@ -33,12 +33,26 @@ async function runCheck(formData: FormData) {
   }
 }
 
+async function disposeAlert(formData: FormData) {
+  "use server";
+  const watchId = String(formData.get("watch_id") ?? "");
+  const alertId = String(formData.get("alert_id") ?? "");
+  const disposition = String(formData.get("disposition") ?? "") as Disposition;
+  const notes = String(formData.get("notes") ?? "").trim() || undefined;
+  try {
+    await setAlertDisposition(watchId, alertId, { disposition, notes });
+  } catch {
+    // The alerts tab reloads anyway; a failed disposition surfaces there.
+  }
+  redirect(`/watch/${encodeURIComponent(watchId)}?tab=alerts&disposed=1`);
+}
+
 export default async function WatchDetailPage({
   params,
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ tab?: string; checked?: string; error?: string }>;
+  searchParams: Promise<{ tab?: string; checked?: string; error?: string; disposed?: string }>;
 }) {
   const { id } = await params;
   const qs = await searchParams;
@@ -54,7 +68,7 @@ export default async function WatchDetailPage({
       </Chrome>
     );
   }
-  const alerts = await listAlerts(id).catch(() => null);
+  const checks = await listChecks(id, 50).catch(() => null);
   const shortId = id.length > 8 ? id.slice(0, 8) : id;
 
   return (
@@ -66,6 +80,7 @@ export default async function WatchDetailPage({
             <h1 className="page-title">{shortId} — {watch.label || "Untitled watch"}</h1>
             <p className="page-sub">
               Target {shortAddr(watch.address)} · {watch.chain} · {watch.status}
+              {watch.classification ? ` · ${watch.classification}` : ""}
             </p>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
@@ -89,11 +104,13 @@ export default async function WatchDetailPage({
         </div>
         {qs.checked ? <p style={{ fontSize: 12, color: "var(--ok-text)", marginTop: 8 }}>Check cycle completed.</p> : null}
         {qs.error ? <p style={{ fontSize: 12, color: "var(--signal)", marginTop: 8 }}>Check failed ({qs.error}).</p> : null}
+        {qs.disposed ? <p style={{ fontSize: 12, color: "var(--ok-text)", marginTop: 8 }}>Alert disposition recorded.</p> : null}
       </div>
       <WatchDetailTabs
         initialTab={qs.tab ?? "overview"}
         watch={watch}
-        alerts={alerts?.alerts ?? null}
+        checks={checks?.checks ?? null}
+        disposeAlert={disposeAlert}
       />
     </Chrome>
   );

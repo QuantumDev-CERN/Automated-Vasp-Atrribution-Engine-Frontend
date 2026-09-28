@@ -4,6 +4,7 @@ import { vasp } from "./server";
 export type ApiUser = {
   user_id: string;
   name: string;
+  email: string | null;
   role: string;
   jurisdictions: string[];
   active: boolean;
@@ -25,6 +26,13 @@ export type AuditEvent = {
 
 export function listUsers() {
   return vasp.get<{ users: ApiUser[] }>("/admin/users");
+}
+
+/** Identity behind the configured API key — GET /admin/users/me (M26). */
+export type ApiMe = ApiUser & { email: string | null; last_active: string | null };
+
+export function getMe() {
+  return vasp.get<ApiMe>("/admin/users/me");
 }
 
 export function createUser(payload: { name: string; role: string; jurisdictions?: string[] }) {

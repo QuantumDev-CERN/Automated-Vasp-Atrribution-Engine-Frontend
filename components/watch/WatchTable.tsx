@@ -45,7 +45,7 @@ export function WatchTable({ watches, checkNow }: {
         <table className="data-table">
           <thead>
             <tr>
-              <th>Watch</th><th>Target</th><th>Address</th><th>Chain</th><th>Status</th><th>Last check</th><th className="cell-end">Action</th>
+              <th>Watch</th><th>Target</th><th>Address</th><th>Chain</th><th>Status</th><th>Last check</th><th className="cell-end">24h alerts</th><th className="cell-end">Checks</th><th className="cell-end">Action</th>
             </tr>
           </thead>
           <tbody>
@@ -59,6 +59,8 @@ export function WatchTable({ watches, checkNow }: {
                   {w.status === "active" ? "Active" : "Paused"}
                 </td>
                 <td>{w.last_checked_at ? fmtDate(w.last_checked_at) : "—"}</td>
+                <td className="cell-end">{w.alerts_24h ?? "—"}</td>
+                <td className="cell-end">{w.lifetime_checks ?? "—"}</td>
                 <td className="cell-end">
                   <form action={checkNow} style={{ display: "inline" }}>
                     <input type="hidden" name="watch_id" value={w.watch_id} />
@@ -77,9 +79,6 @@ export function WatchTable({ watches, checkNow }: {
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12 }}>
         <span style={{ fontSize: 12, color: "var(--tertiary)" }}>Showing {rows.length} of {watches.length} watches</span>
       </div>
-      <p style={{ fontSize: 11, color: "var(--tertiary)", marginTop: 8 }}>
-        Cadence and 24h hit counts need backend fields — see docs/BACKEND-NEEDS.md.
-      </p>
     </div>
   );
 }

@@ -4,60 +4,59 @@ Endpoints and fields the finalized frontend template needs but the engine
 does not expose yet. The frontend renders honest unavailable states for
 all of these — nothing is fabricated or hardcoded to fill the gap.
 
-## Missing endpoints
+Everything the M26 milestone added is live in the UI now:
 
-1. **`GET /cases`** — paginated case collection with filters (status, search).
-   Needed by: Cases list table, counts, filter tabs, search, pagination.
-2. **`GET /admin/users/me`** — identity behind the configured `X-API-Key`.
-   Needed by: top-bar operator chip (slot stays empty until this exists).
-3. **`GET /cases/{case_id}/latest`** (or job/report ids on the case record) —
-   case → latest trace job + report lookup.
-   Needed by: case detail scores, attribution panel, report & certificate card,
-   "Open report" button.
-4. **`GET /filings`** — paginated filings registry (ref, filed, subject, type,
-   channel, status, ack ref).
-   Needed by: Filings register table, status filter tabs, pagination.
-5. **`GET /filings/{filing_id}`** — single filing detail (summary, signals
-   cited, transmission log, acknowledgement).
-   Needed by: Filing detail page. (The SAHYOG mock's `GET /sahyog/cases/{id}`
-   covers mock-submitted cases only, in memory.)
-6. **`POST /filings/{filing_id}/resend`** — server-side signed re-send of the
-   attribution webhook. The frontend must not hold `SAHYOG_WEBHOOK_SECRET`.
-   Needed by: "Re-send webhook" on the filing detail page.
-7. **`POST /intel/infrastructure`** (or `GET /intel/infrastructure`) — ranked
-   entity feed across all tags. Only the single-tag
-   `GET /intel/infrastructure/{tag}` exists.
-   Needed by: Intelligence "Ranked entities" section.
-8. **Watch alert disposition** — `PATCH /watchlist/{watch_id}/alerts/{alert_id}`
-   accepting an analyst disposition. No such route exists.
-   Needed by: watch detail alert dispositions.
+- `GET /cases` (paginated, status/q filters) → Cases register table
+- `GET /admin/users/me` → top-bar operator chip
+- `GET /cases/{case_id}/latest` → case detail scores, attribution terminal
+  reason, report & certificate card, "Open report" button
+- `GET /reports/{report_id}` → full report + evidentiary certificate page
+- `GET /filings` (paginated, status filter) → Filings register table
+- `GET /filings/{filing_id}` → filing detail (summary, transmission log,
+  linked report)
+- `POST /filings/{filing_id}/resend` → server-side signed re-send, recorded
+  as a NEW filing row
+- `GET /intel/links/ranked` → Intelligence ranked-tag feed
+- `GET /watchlist/{watch_id}/checks` → watch check history table
+- `PATCH /watchlist/{watch_id}/alerts/{alert_id}` → alert disposition
+- Watch detail now carries `classification`, `cadence_minutes`,
+  `lifetime_checks`, `lifetime_alerts`, `alerts_24h`, `check_history[]`,
+  `alerts[]` with disposition metadata
+- `GET /cases/{case_id}/graph/stats` now carries `classifier_breakdown`
+  and `daily_activity` (last-30-day counts for the workbench chart)
+- Graph path hops now carry `kind` + `confidence`; terminal reason is
+  surfaced on the path response and the case detail attribution card
+- Admin users now carry `email`; `last_active` is honestly `null`
+  (no such column exists — see below)
 
-## Missing fields on existing endpoints
+## Genuine remaining gaps
 
-9. **Case record** (`GET /cases/{case_id}`): no `risk`, `confidence`,
-   `assignee`, `updated_at`, or trace/report summary fields. The template's
-   list columns (Risk, Confidence, Updated, Assignee) and the detail "SCORES"
-   panel cannot be populated. (`officer_id` is shown as the assignee source
-   where the template needs a name — currently rendered from `officer_id`.)
-10. **Graph stats** (`GET /cases/{case_id}/graph/stats`): returns
-    addresses/transfers/transactions only — not the peel/sweep/mixer/bridge
-    classifier breakdown the template shows.
-11. **Graph path** (`GET /cases/{case_id}/graph/path`): hops carry address,
-    kind, confidence, reason — but the template's per-hop value/asset/tx and
-    the header's terminal VASP name / confidence / risk are not present.
-12. **Watch record** (`GET /watchlist`): no `cadence`, `hits_24h`,
-    `classification`, `lifetime_hits`, or check history. Those columns are
-    omitted with a footnote instead of invented.
-13. **Watch alert** (`GET /watchlist/{watch_id}/alerts`): no `signal`,
-    `points`, `severity`, or `disposition`. The alerts table shows the real
-    fields instead (tx, direction, counterparty, value, asset, VASP hit).
-14. **Admin user** (`GET /admin/users`): no `email` or `last_active`.
-    Those columns are omitted with a footnote instead of invented.
-15. **Health/readiness** (`GET /health`, `GET /ready`): no per-service
-    operational model beyond store/queue/graph class names. The status bar
-    maps those class names honestly (memory fallback = dot down).
-16. **Transaction activity** (workbench "last 30 days" chart): no endpoint
-    provides per-day activity counts.
+Each claim below was verified against the backend routers on 2026-09-28.
+
+1. **Case record** (`api/routers/cases.py::_dump`): no `assignee` field (only
+   `officer_id`, a free string), no `updated_at` (only `created_at`).
+   The register's "Opened" column uses `created_at`; there is no assignee
+   name to show.
+2. **Case status enum**: statuses are free strings. The engine emits
+   `"received"` on registration and `"attributed"` when a trace completes
+   (`worker/__init__.py:133`); nothing else sets a case status. The filter
+   tabs use exactly these two.
+3. **Filing `ack_ref` is always null**: `worker/__init__.py` never sets it,
+   and the SAHYOG mock's acknowledgement payloads carry `{"ack": true}` but
+   no reference string (`integrations/sahyog_mock/mock_server.py:81`). This
+   is a mock limitation, not a missing endpoint — the filing detail page
+   says so instead of showing a fake reference.
+4. **Watch alerts have no `signal`, `points`, or `severity`**: the alert dump
+   (`api/routers/watchlist.py::_enrich`) never had these fields; the alerts
+   table shows the real fields (tx, direction, counterparty, value, asset,
+   VASP hit, disposition) and does not pretend the others exist.
+5. **`GET /cases/{case_id}/links` has no strength score**: entries carry
+   `case_id`, `overlap`, and `shared_tags` only.
+6. **Admin `last_active` is honestly null**: there is no `last_active`
+   column (`api/routers/admin.py::_dump` returns `None` by design).
+7. **Health/readiness** (`GET /health`, `GET /ready`): no per-service
+   operational model beyond store/queue/graph class names. The status bar
+   maps those class names honestly (memory fallback = dot down).
 
 ## Static protocol choices (documented, not fabricated)
 
@@ -72,6 +71,14 @@ the engine itself defines, kept in the frontend with their source cited:
 - **User roles** (`app/admin/users/new/page.tsx`): viewer, analyst, auditor,
   admin — copied verbatim from the backend's `VALID_ROLES`
   (`api/routers/admin.py`); the backend rejects anything else.
+- **Case statuses** (`app/cases/page.tsx`): received, attributed — the only
+  two statuses the engine emits (see gap 2).
+- **Filing statuses** (`app/filings/page.tsx`): pending, delivered, failed —
+  copied verbatim from `engine/store/base.py` (`FILING_PENDING`,
+  `FILING_DELIVERED`, `FILING_FAILED`).
+- **Alert dispositions** (`lib/api/watchlist.ts`): true_positive,
+  false_positive, benign, escalated — the backend's `VALID_DISPOSITIONS`
+  (`api/routers/watchlist.py`); anything else is rejected.
 - **Jurisdiction hints**: the engine's deployment context is FIU-IND /
   SAHYOG (India), so placeholder hints may show "IN" as a format example.
   No jurisdiction is ever pre-selected or submitted by default.

@@ -3,9 +3,9 @@ import { getCurrentUserLabel } from "@/lib/api/server";
 
 /**
  * Top bar: app mark + name | centered breadcrumb | PROD · operator · clock.
- * The operator chip renders only when the backend can tell us who the
- * API key belongs to (GET /admin/users/me — see docs/BACKEND-NEEDS.md).
- * Until then the slot stays empty; we never invent a name.
+ * The operator chip renders the identity behind the configured API key
+ * (GET /admin/users/me); when the backend cannot tell us, the slot stays
+ * empty — we never invent a name.
  */
 export async function TopBar({ crumb }: { crumb: string }) {
   const operator = await getCurrentUserLabel().catch(() => null);

@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PathHops } from "./PathHops";
-import { Empty, Unavailable } from "@/components/state";
+import { Empty } from "@/components/state";
 import { shortAddr, fmtDate, fmtNum } from "@/lib/format";
-import type { GraphTopology, GraphNode, GraphPath, CaseLinks, InfraPivot } from "@/lib/api/graph";
+import type { GraphTopology, GraphNode, GraphPath, GraphStats, CaseLinks, InfraPivot } from "@/lib/api/graph";
 import type { TraceJob } from "@/lib/api/jobs";
 
 type Props = {
@@ -14,7 +14,7 @@ type Props = {
   topology: GraphTopology | null;
   topoError: string | null;
   path: GraphPath | null;
-  stats: (Record<string, number> & { case_id: string; backend: string }) | null;
+  stats: GraphStats | null;
   links: CaseLinks | null;
   infra: InfraPivot | null;
   infraTag: string | null;
@@ -38,6 +38,28 @@ function nodeKind(n: GraphNode, subject: string): string {
 }
 
 const MAX_RENDER = 60;
+
+/** Tiny bar chart for per-day transfer counts — data from the engine,
+ * nothing fabricated. */
+function ActivityBars({ days }: { days: { date: string; transactions: number; transfers: number }[] }) {
+  const max = Math.max(1, ...days.map((d) => d.transfers));
+  return (
+    <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 72 }}>
+      {days.map((d) => (
+        <div
+          key={d.date}
+          title={`${d.date} — ${d.transactions} transactions, ${d.transfers} transfers`}
+          style={{
+            flex: 1, minWidth: 0,
+            height: `${Math.max(3, Math.round((d.transfers / max) * 72))}px`,
+            background: "var(--primary)",
+            opacity: d.transfers ? 1 : 0.25,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
 const W = 900;
 const H = 520;
 
@@ -213,7 +235,15 @@ export function WorkbenchView(props: Props) {
                 </>
               )}
               <div style={{ marginTop: 20 }}>
-                <Unavailable endpoint="GET /cases/{case_id}/graph/activity" what="Transaction activity chart" />
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+                  <span className="section-label">Transaction activity · last 30 days</span>
+                  <span className="endpoint-chip">GET /cases/{`{case_id}`}/graph/stats</span>
+                </div>
+                {(props.stats?.daily_activity ?? []).length ? (
+                  <ActivityBars days={props.stats!.daily_activity} />
+                ) : (
+                  <Empty title="No activity data" hint="Daily counts appear once the traced graph has timestamped edges." />
+                )}
               </div>
             </div>
             <div>
@@ -241,22 +271,40 @@ export function WorkbenchView(props: Props) {
                   <span className="endpoint-chip">GET /cases/{`{case_id}`}/graph/stats</span>
                 </div>
                 {props.stats ? (
-                  <dl className="kv" style={{ gridTemplateColumns: "140px 1fr" }}>
-                    {Object.entries(props.stats)
-                      .filter(([k]) => k !== "case_id")
-                      .map(([k, v]) => (
-                        <div className="kv-row" key={k}>
-                          <dt>{k.replace(/_/g, " ")}</dt>
-                          <dd className="t-num">{typeof v === "number" ? fmtNum(v) : String(v)}</dd>
-                        </div>
-                      ))}
-                  </dl>
+                  <>
+                    <dl className="kv" style={{ gridTemplateColumns: "140px 1fr" }}>
+                      {Object.entries(props.stats)
+                        .filter(([k, v]) => k !== "case_id" && typeof v !== "object")
+                        .map(([k, v]) => (
+                          <div className="kv-row" key={k}>
+                            <dt>{k.replace(/_/g, " ")}</dt>
+                            <dd className="t-num">{typeof v === "number" ? fmtNum(v) : String(v)}</dd>
+                          </div>
+                        ))}
+                    </dl>
+                    {Object.keys(props.stats.classifier_breakdown ?? {}).length ? (
+                      <>
+                        <div className="section-label" style={{ margin: "16px 0 8px" }}>Classifier breakdown</div>
+                        <dl className="kv" style={{ gridTemplateColumns: "140px 1fr" }}>
+                          {Object.entries(props.stats.classifier_breakdown).map(([k, v]) => (
+                            <div className="kv-row" key={k}>
+                              <dt style={{ textTransform: "capitalize" }}>{k.replace(/-/g, " ")}</dt>
+                              <dd className="t-num">{v}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </>
+                    ) : null}
+                    {(props.stats.daily_activity ?? []).length ? (
+                      <>
+                        <div className="section-label" style={{ margin: "16px 0 8px" }}>Daily activity · last 30 days</div>
+                        <ActivityBars days={props.stats.daily_activity} />
+                      </>
+                    ) : null}
+                  </>
                 ) : (
                   <Empty title="Stats unavailable" hint="The stats endpoint did not respond." />
                 )}
-                <p style={{ fontSize: 11, color: "var(--tertiary)", marginTop: 8 }}>
-                  Classifier breakdowns (peel / sweep / mixer / bridge counts) need backend support — see docs/BACKEND-NEEDS.md.
-                </p>
               </div>
             </div>
           </div>

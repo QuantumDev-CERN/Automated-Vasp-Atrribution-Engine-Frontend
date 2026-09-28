@@ -3,10 +3,10 @@ import { notFound, redirect } from "next/navigation";
 import { Chrome } from "@/components/chrome/Chrome";
 import { PageError } from "@/components/state";
 import { CaseDetailTabs } from "@/components/cases/CaseDetailTabs";
-import { getCase } from "@/lib/api/cases";
+import { getCase, getLatest } from "@/lib/api/cases";
 import { getGraphPath, getCaseLinks, getInfrastructure } from "@/lib/api/graph";
+import { listFilings } from "@/lib/api/filings";
 import { listOutcomes } from "@/lib/api/feedback";
-import { getSahyogCase } from "@/lib/api/sahyog";
 import { startTrace } from "@/lib/api/jobs";
 import { recordOutcome } from "@/lib/api/feedback";
 import { ApiError } from "@/lib/api/server";
@@ -65,20 +65,20 @@ export default async function CaseDetailPage({
   }
 
   // Independent panels; one failing must not kill the page.
-  const [pathR, linksR, outcomesR, filingR] = await Promise.allSettled([
+  const [latestR, pathR, linksR, outcomesR, filingsR] = await Promise.allSettled([
+    getLatest(id),
     getGraphPath(id),
     getCaseLinks(id),
     listOutcomes(),
-    getSahyogCase(id),
+    listFilings({ case_id: id, limit: 50 }),
   ]);
+  const latest = latestR.status === "fulfilled" ? latestR.value : null;
   const path = pathR.status === "fulfilled" ? pathR.value : null;
   const links = linksR.status === "fulfilled" ? linksR.value : null;
   const outcomes = outcomesR.status === "fulfilled"
     ? outcomesR.value.outcomes.filter((o) => o.case_id === id)
     : null;
-  const filing = filingR.status === "fulfilled" && !(filingR.value as { error?: string }).error
-    ? (filingR.value as Record<string, unknown>)
-    : null;
+  const filings = filingsR.status === "fulfilled" ? filingsR.value.filings : null;
 
   // Shared-infrastructure pivot follows the first analyst-curated tag on the
   // strongest cross-case link — real tag, real lookup, no invented pivot.
@@ -86,6 +86,8 @@ export default async function CaseDetailPage({
   const infra = firstTag
     ? await getInfrastructure(firstTag).catch(() => null)
     : null;
+
+  const reportId = latest?.report?.report_id ?? null;
 
   return (
     <Chrome crumb={`Cases › ${id}`}>
@@ -101,14 +103,20 @@ export default async function CaseDetailPage({
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <Link href="/cases" className="btn-secondary">Back to cases</Link>
-            <button
-              className="btn-primary"
-              disabled
-              title="Needs a case → latest report lookup on the backend (see docs/BACKEND-NEEDS.md)"
-              style={{ opacity: 0.55, cursor: "not-allowed" }}
-            >
-              Open report
-            </button>
+            {reportId ? (
+              <Link href={`/reports/${reportId}`} className="btn-primary">
+                Open report
+              </Link>
+            ) : (
+              <button
+                className="btn-primary"
+                disabled
+                title="No trace report yet — run a trace first"
+                style={{ opacity: 0.55, cursor: "not-allowed" }}
+              >
+                Open report
+              </button>
+            )}
             <form action={runTrace}>
               <input type="hidden" name="case_id" value={id} />
               <button type="submit" className="btn-primary" style={{ background: "var(--primary)" }}>
@@ -119,6 +127,7 @@ export default async function CaseDetailPage({
         </div>
         <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
           <span className="endpoint-chip">POST /jobs/trace</span>
+          {reportId ? <span className="endpoint-chip">GET /cases/{`{case_id}`}/latest</span> : null}
           {qs.trace ? <span style={{ fontSize: 12, color: "var(--signal)" }}>Trace failed to start ({qs.trace}).</span> : null}
         </div>
       </div>
@@ -126,12 +135,13 @@ export default async function CaseDetailPage({
       <CaseDetailTabs
         initialTab={qs.tab ?? "overview"}
         caseRec={caseRec}
+        latest={latest}
         path={path}
         links={links}
         infra={infra}
         infraTag={firstTag ?? null}
         outcomes={outcomes}
-        filing={filing}
+        filings={filings}
         submitOutcome={submitOutcome}
         saved={qs.saved === "1"}
         formError={qs.error}

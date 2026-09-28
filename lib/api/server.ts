@@ -75,9 +75,8 @@ export function sahyogBaseUrl() {
 }
 
 /**
- * Who does the configured API key belong to? Returns "Name · role" or null.
- * Needs GET /admin/users/me on the backend (docs/BACKEND-NEEDS.md); until
- * it exists this resolves null and the top-bar slot stays empty.
+ * Who does the configured API key belong to? Returns "Name · role" or null
+ * (GET /admin/users/me); when it fails the top-bar slot stays empty.
  */
 export async function getCurrentUserLabel(): Promise<string | null> {
   try {

@@ -64,6 +64,21 @@ export type InfraPivot = {
   address_count: number;
 };
 
+/** Ranked intelligence entry — GET /intel/links/ranked (M26). */
+export type RankedEntry = {
+  tag: string;
+  address_count: number;
+  case_count: number;
+  cases: string[];
+  addresses: { address: string; chain: string }[];
+};
+
+export function getRankedIntel(limit = 50) {
+  return vasp.get<{ ranked: RankedEntry[]; total_tags: number }>(
+    `/intel/links/ranked?limit=${limit}`
+  );
+}
+
 export function getGraphTopology(caseId: string, maxNodes = 500, maxEdges = 2000) {
   return vasp.get<GraphTopology>(
     `/cases/${caseId}/graph?max_nodes=${maxNodes}&max_edges=${maxEdges}`
@@ -75,10 +90,17 @@ export function getGraphPath(caseId: string) {
 }
 
 export function getGraphStats(caseId: string) {
-  return vasp.get<{ case_id: string; backend: string } & Record<string, number>>(
-    `/cases/${caseId}/graph/stats`
-  );
+  return vasp.get<GraphStats>(`/cases/${caseId}/graph/stats`);
 }
+
+/** Graph stats — GET /cases/{case_id}/graph/stats (M11, enriched M26 with
+ * classifier breakdown + daily activity from persisted hop meta). */
+export type GraphStats = {
+  case_id: string;
+  backend: string;
+  classifier_breakdown: Record<string, number>;
+  daily_activity: { date: string; transactions: number; transfers: number }[];
+} & Record<string, number | Record<string, number> | { date: string; transactions: number; transfers: number }[]>;
 
 export function getCaseLinks(caseId: string, minOverlap = 1) {
   return vasp.get<CaseLinks>(`/cases/${caseId}/links?min_overlap=${minOverlap}`);
