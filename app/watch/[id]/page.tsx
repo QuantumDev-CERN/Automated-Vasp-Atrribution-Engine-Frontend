@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { Chrome } from "@/components/chrome/Chrome";
 import { PageError } from "@/components/state";

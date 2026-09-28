@@ -46,12 +46,13 @@ all of these — nothing is fabricated or hardcoded to fill the gap.
     kind, confidence, reason — but the template's per-hop value/asset/tx and
     the header's terminal VASP name / confidence / risk are not present.
 12. **Watch record** (`GET /watchlist`): no `cadence`, `hits_24h`,
-    `classification`, `lifetime_hits`, or check history. Columns render "—".
+    `classification`, `lifetime_hits`, or check history. Those columns are
+    omitted with a footnote instead of invented.
 13. **Watch alert** (`GET /watchlist/{watch_id}/alerts`): no `signal`,
     `points`, `severity`, or `disposition`. The alerts table shows the real
     fields instead (tx, direction, counterparty, value, asset, VASP hit).
 14. **Admin user** (`GET /admin/users`): no `email` or `last_active`.
-    Columns render "—".
+    Those columns are omitted with a footnote instead of invented.
 15. **Health/readiness** (`GET /health`, `GET /ready`): no per-service
     operational model beyond store/queue/graph class names. The status bar
     maps those class names honestly (memory fallback = dot down).
