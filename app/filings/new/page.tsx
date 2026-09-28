@@ -4,7 +4,7 @@ import { PageError } from "@/components/state";
 import { sahyog } from "@/lib/api/server";
 import { ApiError } from "@/lib/api/server";
 
-const CHAINS = ["ethereum", "bitcoin", "tron", "solana", "bsc"];
+import { CHAINS } from "@/lib/chains";
 
 async function submitFiling(formData: FormData) {
   "use server";
@@ -68,7 +68,7 @@ export default async function NewFilingPage({ searchParams }: { searchParams: Pr
       <form action={submitFiling}>
         <div style={field}>
           <label style={label} htmlFor="fir_number">FIR number *</label>
-          <input id="fir_number" name="fir_number" style={input} required placeholder="e.g. FIR/2026/0917" />
+          <input id="fir_number" name="fir_number" style={input} required placeholder="FIR number" />
         </div>
         <div style={field}>
           <label style={label} htmlFor="suspect_address">Suspect address *</label>

@@ -11,7 +11,7 @@ async function create(formData: FormData) {
   "use server";
   const name = String(formData.get("name") ?? "").trim();
   const role = String(formData.get("role") ?? "");
-  const jurisdictions = String(formData.get("jurisdictions") ?? "IN")
+  const jurisdictions = String(formData.get("jurisdictions") ?? "")
     .split(",").map((s) => s.trim()).filter(Boolean);
   if (!name || !ROLES.includes(role)) redirect("/admin/users/new?error=missing");
   try {
@@ -82,7 +82,7 @@ export default async function NewUserPage({
         <form action={create}>
           <div style={field}>
             <label style={label} htmlFor="name">Name *</label>
-            <input id="name" name="name" style={input} required placeholder="e.g. analyst-3" />
+            <input id="name" name="name" style={input} required placeholder="Analyst name" />
           </div>
           <div style={field}>
             <label style={label} htmlFor="role">Role *</label>
@@ -93,7 +93,7 @@ export default async function NewUserPage({
           </div>
           <div style={field}>
             <label style={label} htmlFor="jurisdictions">Jurisdictions</label>
-            <input id="jurisdictions" name="jurisdictions" style={input} defaultValue="IN" placeholder="Comma separated, e.g. IN, US" />
+            <input id="jurisdictions" name="jurisdictions" style={input} placeholder="Comma separated, e.g. IN, US" />
           </div>
           <button type="submit" className="btn-primary">Create user</button>
         </form>

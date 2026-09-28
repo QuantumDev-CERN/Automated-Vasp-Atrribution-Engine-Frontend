@@ -180,7 +180,7 @@ export function CaseDetailTabs(props: Props) {
                 <label style={radioRow}><input type="radio" name="outcome" value="inconclusive" /> Inconclusive</label>
                 <div style={{ marginTop: 16, marginBottom: 12 }}>
                   <label className="section-label" htmlFor="fb-vasp" style={{ display: "block", marginBottom: 6 }}>VASP (as attributed)</label>
-                  <input id="fb-vasp" name="vasp" required className="search-input" style={{ width: "100%" }} placeholder="e.g. ChangeNOW" />
+                  <input id="fb-vasp" name="vasp" required className="search-input" style={{ width: "100%" }} placeholder="VASP name" />
                 </div>
                 <div style={{ marginBottom: 12 }}>
                   <label className="section-label" htmlFor="fb-conf" style={{ display: "block", marginBottom: 6 }}>Predicted confidence (0–1)</label>

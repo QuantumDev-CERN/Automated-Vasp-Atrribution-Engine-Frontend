@@ -39,7 +39,7 @@ export default async function IntelPage({ searchParams }: { searchParams: Promis
 
       {!caseId ? (
         <form action={openIntel} style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 32 }}>
-          <input name="case_id" className="search-input" style={{ minWidth: 320 }} placeholder="Case ID, e.g. CASE-2026-0917" required />
+          <input name="case_id" className="search-input" style={{ minWidth: 320 }} placeholder="Case ID" required />
           <button type="submit" className="btn-secondary">Show links</button>
           <span className="endpoint-chip">GET /cases/{`{case_id}`}/links</span>
         </form>

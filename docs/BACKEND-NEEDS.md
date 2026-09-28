@@ -59,6 +59,27 @@ all of these — nothing is fabricated or hardcoded to fill the gap.
 16. **Transaction activity** (workbench "last 30 days" chart): no endpoint
     provides per-day activity counts.
 
+## Static protocol choices (documented, not fabricated)
+
+These are not backend data — they are fixed protocol/enumeration choices
+the engine itself defines, kept in the frontend with their source cited:
+
+- **Chains** (`lib/chains.ts`): ethereum, bitcoin, tron, solana, bsc — the
+  engine's adapter set per the master reference (BSC added in M15). The
+  backend takes `chain` as a free string, so there is no metadata endpoint
+  to read this from yet; replace the import with a backend call if one
+  appears.
+- **User roles** (`app/admin/users/new/page.tsx`): viewer, analyst, auditor,
+  admin — copied verbatim from the backend's `VALID_ROLES`
+  (`api/routers/admin.py`); the backend rejects anything else.
+- **Jurisdiction hints**: the engine's deployment context is FIU-IND /
+  SAHYOG (India), so placeholder hints may show "IN" as a format example.
+  No jurisdiction is ever pre-selected or submitted by default.
+
+No other names, IDs, numbers, or records are hardcoded anywhere in the UI:
+every input placeholder is a neutral format hint, and every data panel
+renders live API data or an honest unavailable state.
+
 ## Notes
 
 - Template counts, timestamps, names, scores and records visible in the

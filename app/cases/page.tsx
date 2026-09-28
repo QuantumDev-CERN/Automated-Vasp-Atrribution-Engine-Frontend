@@ -34,7 +34,7 @@ export default function CasesPage() {
         <input
           name="case_id"
           className="search-input"
-          placeholder="Open a case by ID, e.g. CASE-2026-0917"
+          placeholder="Open a case by ID"
           style={{ minWidth: 320 }}
           required
         />

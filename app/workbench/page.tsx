@@ -41,7 +41,7 @@ export default async function WorkbenchPage({
           <p className="page-sub">Open a case to inspect its traced graph</p>
         </div>
         <form action={openWorkbench} style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <input name="case_id" className="search-input" style={{ minWidth: 320 }} placeholder="Case ID, e.g. CASE-2026-0917" required />
+          <input name="case_id" className="search-input" style={{ minWidth: 320 }} placeholder="Case ID" required />
           <button type="submit" className="btn-secondary">Open</button>
           <span className="endpoint-chip">GET /cases/{`{case_id}`}/graph</span>
         </form>

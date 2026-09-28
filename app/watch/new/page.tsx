@@ -4,7 +4,7 @@ import { PageError } from "@/components/state";
 import { addWatch } from "@/lib/api/watchlist";
 import { ApiError } from "@/lib/api/server";
 
-const CHAINS = ["ethereum", "bitcoin", "tron", "solana", "bsc"];
+import { CHAINS } from "@/lib/chains";
 
 async function createWatch(formData: FormData) {
   "use server";
@@ -71,7 +71,7 @@ export default async function NewWatchPage({ searchParams }: { searchParams: Pro
         </div>
         <div style={field}>
           <label style={label} htmlFor="wlabel">Label</label>
-          <input id="wlabel" name="label" style={input} placeholder="e.g. ChangeNOW hot wallet" />
+          <input id="wlabel" name="label" style={input} placeholder="Optional label" />
         </div>
         <div style={field}>
           <label style={label} htmlFor="case_id">Case ID</label>

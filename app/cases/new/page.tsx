@@ -4,7 +4,7 @@ import { PageError } from "@/components/state";
 import { submitCase } from "@/lib/api/cases";
 import { ApiError } from "@/lib/api/server";
 
-const CHAINS = ["ethereum", "bitcoin", "tron", "solana", "bsc"];
+import { CHAINS } from "@/lib/chains";
 
 async function createCase(formData: FormData) {
   "use server";
@@ -64,7 +64,7 @@ export default async function NewCasePage({ searchParams }: { searchParams: Prom
       <form action={createCase}>
         <div style={field}>
           <label style={label} htmlFor="fir_number">FIR number *</label>
-          <input id="fir_number" name="fir_number" style={input} required placeholder="e.g. FIR/2026/0917" />
+          <input id="fir_number" name="fir_number" style={input} required placeholder="FIR number" />
         </div>
         <div style={field}>
           <label style={label} htmlFor="suspect_address">Suspect address *</label>
