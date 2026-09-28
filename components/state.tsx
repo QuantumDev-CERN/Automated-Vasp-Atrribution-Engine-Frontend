@@ -42,6 +42,29 @@ export function Unavailable({ endpoint, what }: { endpoint: string; what: string
   );
 }
 
+/** 403 — the caller's API key lacks the capability for this page. */
+export function Forbidden({ endpoint }: { endpoint: string }) {
+  return (
+    <div className="error-state">
+      <strong style={{ color: "var(--ink)", display: "block", marginBottom: 6 }}>Not allowed</strong>
+      <span>
+        Your API key does not have the capability for <span className="mono">{endpoint}</span>.
+        Ask an admin for the required role.
+      </span>
+    </div>
+  );
+}
+
+/** 404 route state. */
+export function NotFound({ what = "page" }: { what?: string }) {
+  return (
+    <div className="empty-state">
+      <strong>This {what} does not exist</strong>
+      <span>Check the URL — nothing was found at this address.</span>
+    </div>
+  );
+}
+
 /** Row-level skeleton while data loads. */
 export function SkeletonRows({ rows = 6, cols = 5 }: { rows?: number; cols?: number }) {
   return (
