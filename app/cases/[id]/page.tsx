@@ -103,6 +103,9 @@ export default async function CaseDetailPage({
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <Link href="/cases" className="btn-secondary">Back to cases</Link>
+            <Link href={`/workbench?case=${encodeURIComponent(id)}`} className="btn-secondary">
+              Open in workbench
+            </Link>
             {reportId ? (
               <Link href={`/reports/${reportId}`} className="btn-primary">
                 Open report

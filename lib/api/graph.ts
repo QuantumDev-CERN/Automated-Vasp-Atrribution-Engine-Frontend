@@ -14,9 +14,12 @@ export type GraphEdge = {
   dst: string;
   tx_hash: string | null;
   value: string;
+  /** Human-denominated value (coin units); prefer over value for display. */
+  value_denominated?: string | null;
   asset_kind: string | null;
   asset_symbol: string | null;
   asset_contract: string | null;
+  asset_decimals?: number | null;
   block_time: string | null;
   block_number: number | null;
 };
@@ -35,6 +38,8 @@ export type PathHop = {
   address: string;
   via_tx?: string | null;
   value?: string | null;
+  /** Human-denominated value (coin units); prefer over value for display. */
+  value_denominated?: string | null;
   asset_symbol?: string | null;
   block_time?: string | null;
   kind?: string | null;

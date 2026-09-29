@@ -37,7 +37,109 @@ function nodeKind(n: GraphNode, subject: string): string {
   return "Address";
 }
 
-const MAX_RENDER = 60;
+/** Max nodes on the path-first canvas (path hops + bounded context). */
+
+/** Denominated edge label: "1.80 ETH". Prefers the backend's
+ * value_denominated (coin units); falls back to raw value only when the
+ * backend predates it. Never prints base units next to a coin symbol. */
+function edgeLabel(e: { value?: string | null; value_denominated?: string | null; asset_symbol?: string | null }): string {
+  const raw = e.value_denominated ?? e.value;
+  if (!raw || raw === "0") return "";
+  const n = Number(raw);
+  const body = Number.isFinite(n)
+    ? n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : raw;
+  return e.asset_symbol ? `${body} ${e.asset_symbol}` : body;
+}
+
+/** Path-first layout (per FRONTEND-SPEC §4.3): the attribution path is the
+ * canvas. Path hops are laid left-to-right by hop index; a bounded set of
+ * high-degree neighbours adds context. No degree-ranked hairball. */
+function layout(
+  topology: GraphTopology,
+  subject: string,
+  path: GraphPath | null
+): { placed: Placed[]; edges: { x1: number; y1: number; x2: number; y2: number; label: string; probabilistic: boolean; pathEdge: boolean }[]; total: number } {
+  const nodeById = new Map(topology.nodes.map((n) => [n.id, n]));
+  const pathAddrs = (path?.hops ?? []).map((h) => h.address).filter((a) => nodeById.has(a));
+  // Fallback when no path: subject + terminal + top-degree neighbours.
+  const ordered: GraphNode[] = [];
+  const seen = new Set<string>();
+  const push = (id: string) => {
+    const n = nodeById.get(id);
+    if (n && !seen.has(id)) { seen.add(id); ordered.push(n); }
+  };
+  for (const a of pathAddrs) push(a);
+  push(subject);
+  if (ordered.length === 0) {
+    for (const n of [...topology.nodes].sort((a, b) => b.degree - a.degree).slice(0, 12)) push(n.id);
+  }
+  // Bounded context: up to 2 highest-degree neighbours per path node.
+  const adj = new Map<string, string[]>();
+  for (const e of topology.edges) {
+    if (!nodeById.has(e.src) || !nodeById.has(e.dst)) continue;
+    if (!adj.has(e.src)) adj.set(e.src, []);
+    adj.get(e.src)!.push(e.dst);
+  }
+  const pathSet = new Set(ordered.map((n) => n.id));
+  for (const n of [...ordered]) {
+    if (ordered.length >= 14) break;
+    const nbs = (adj.get(n.id) ?? [])
+      .filter((id) => !pathSet.has(id) && !seen.has(id))
+      .map((id) => nodeById.get(id)!)
+      .sort((a, b) => b.degree - a.degree)
+      .slice(0, 2);
+    for (const nb of nbs) { push(nb.id); pathSet.add(nb.id); }
+  }
+  const ids = new Set(ordered.map((n) => n.id));
+  const hopIndex = new Map(pathAddrs.map((a, i) => [a, i]));
+  const nPath = Math.max(1, pathAddrs.length);
+  const pos = new Map<string, { x: number; y: number; pathEdge: boolean }>();
+  // Path nodes: spread across the canvas by hop index, alternating slight
+  // vertical offsets so labels don't collide (mirrors the SVG).
+  pathAddrs.forEach((a, i) => {
+    const x = 90 + (nPath === 1 ? 0.5 : i / (nPath - 1)) * (W - 180);
+    const y = H / 2 + (i % 2 === 0 ? -70 : 70) * (nPath > 3 ? 1 : 0);
+    pos.set(a, { x, y, pathEdge: true });
+  });
+  // Context nodes: tuck near their path neighbour.
+  let ctxSlot = 0;
+  for (const n of ordered) {
+    if (pos.has(n.id)) continue;
+    const anchor = pathAddrs[ctxSlot % Math.max(1, pathAddrs.length)] ?? n.id;
+    const base = pos.get(anchor) ?? { x: W / 2, y: H / 2 };
+    const k = Math.floor(ctxSlot / Math.max(1, pathAddrs.length));
+    pos.set(n.id, {
+      x: Math.min(W - 60, Math.max(60, base.x + (k % 2 === 0 ? -1 : 1) * 90)),
+      y: Math.min(H - 60, Math.max(60, base.y + (k < 2 ? 110 : -110))),
+      pathEdge: false,
+    });
+    ctxSlot++;
+  }
+  // Ensure every ordered node got a position.
+  for (const n of ordered) {
+    if (!pos.has(n.id)) pos.set(n.id, { x: W / 2, y: H / 2, pathEdge: false });
+  }
+  const placed = ordered.map((node) => ({ node, x: pos.get(node.id)!.x, y: pos.get(node.id)!.y, kind: nodeKind(node, subject) }));
+  const kindById = new Map(placed.map((p) => [p.node.id, p.kind]));
+  const pathPairs = new Set<string>();
+  for (let i = 0; i + 1 < pathAddrs.length; i++) pathPairs.add(`${pathAddrs[i]}>${pathAddrs[i + 1]}`);
+  const edges: { x1: number; y1: number; x2: number; y2: number; label: string; probabilistic: boolean; pathEdge: boolean }[] = [];
+  for (const e of topology.edges) {
+    const a = pos.get(e.src); const b = pos.get(e.dst);
+    if (!a || !b) continue;
+    const isPath = pathPairs.has(`${e.src}>${e.dst}`);
+    const probabilistic = kindById.get(e.src) === "Mixer" && kindById.get(e.dst) === "VASP";
+    edges.push({
+      x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+      label: isPath ? edgeLabel(e) : "",
+      probabilistic,
+      pathEdge: isPath,
+    });
+    if (edges.length >= 200) break;
+  }
+  return { placed, edges, total: topology.total_addresses };
+}
 
 /** Tiny bar chart for per-day transfer counts — data from the engine,
  * nothing fabricated. */
@@ -65,63 +167,6 @@ const H = 520;
 
 type Placed = { node: GraphNode; x: number; y: number; kind: string };
 
-/** Deterministic layered layout: BFS columns from the subject, rows spread. */
-function layout(topology: GraphTopology, subject: string): { placed: Placed[]; edges: { x1: number; y1: number; x2: number; y2: number; label: string }[]; total: number } {
-  const nodes = [...topology.nodes].sort((a, b) => b.degree - a.degree).slice(0, MAX_RENDER);
-  const ids = new Set(nodes.map((n) => n.id));
-  // make sure the subject is in view even if low-degree
-  if (!ids.has(subject)) {
-    const s = topology.nodes.find((n) => n.id === subject);
-    if (s) { nodes[nodes.length - 1] = s; ids.delete(nodes[nodes.length - 1].id); ids.add(subject); }
-  }
-  const adj = new Map<string, string[]>();
-  for (const e of topology.edges) {
-    if (!ids.has(e.src) || !ids.has(e.dst)) continue;
-    if (!adj.has(e.src)) adj.set(e.src, []);
-    adj.get(e.src)!.push(e.dst);
-    if (!adj.has(e.dst)) adj.set(e.dst, []);
-    adj.get(e.dst)!.push(e.src);
-  }
-  const depth = new Map<string, number>();
-  const start = ids.has(subject) ? subject : nodes[0]?.id;
-  if (start) {
-    depth.set(start, 0);
-    const q = [start];
-    while (q.length) {
-      const cur = q.shift()!;
-      for (const nb of adj.get(cur) ?? []) {
-        if (!depth.has(nb)) { depth.set(nb, depth.get(cur)! + 1); q.push(nb); }
-      }
-    }
-  }
-  let extra = Math.max(0, ...[...depth.values(), 0]);
-  for (const n of nodes) if (!depth.has(n.id)) depth.set(n.id, ++extra);
-  const maxDepth = Math.max(1, ...depth.values());
-  const layers = new Map<number, GraphNode[]>();
-  for (const n of nodes) {
-    const d = depth.get(n.id)!;
-    if (!layers.has(d)) layers.set(d, []);
-    layers.get(d)!.push(n);
-  }
-  const pos = new Map<string, { x: number; y: number }>();
-  for (const [d, layer] of layers) {
-    const x = 70 + (d / maxDepth) * (W - 140);
-    layer.forEach((n, i) => {
-      const y = layer.length === 1 ? H / 2 : 60 + (i / (layer.length - 1)) * (H - 120);
-      pos.set(n.id, { x, y });
-    });
-  }
-  const placed = nodes.map((node) => ({ node, ...pos.get(node.id)!, kind: nodeKind(node, subject) }));
-  const edges: { x1: number; y1: number; x2: number; y2: number; label: string }[] = [];
-  for (const e of topology.edges) {
-    const a = pos.get(e.src); const b = pos.get(e.dst);
-    if (!a || !b) continue;
-    const label = e.value && e.value !== "0" ? `${e.value}${e.asset_symbol ? ` ${e.asset_symbol}` : ""}` : "";
-    edges.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, label });
-  }
-  return { placed, edges: edges.slice(0, 200), total: topology.nodes.length };
-}
-
 const TERMINAL = ["complete", "failed"];
 
 export function WorkbenchView(props: Props) {
@@ -146,8 +191,8 @@ export function WorkbenchView(props: Props) {
   }, [props.jobId, liveJob, router]);
 
   const graph = useMemo(
-    () => (props.topology ? layout(props.topology, props.subject) : null),
-    [props.topology, props.subject]
+    () => (props.topology ? layout(props.topology, props.subject, props.path) : null),
+    [props.topology, props.subject, props.path]
   );
   const selectedNode = useMemo(
     () => graph?.placed.find((p) => p.node.id === selected)?.node ?? null,
@@ -169,7 +214,7 @@ export function WorkbenchView(props: Props) {
             <p className="page-sub">
               {jobLine}
               {liveJob?.error ? <span style={{ color: "var(--signal)" }}> · {liveJob.error}</span> : null}
-              {props.topology?.truncated ? <span> · truncated to {MAX_RENDER} in view</span> : null}
+              {props.topology?.truncated ? <span> · path in view, {fmtNum(props.topology.total_addresses)} total</span> : null}
             </p>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
@@ -206,7 +251,12 @@ export function WorkbenchView(props: Props) {
                   <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 6 }} role="img" aria-label="Transaction graph">
                     {graph.edges.map((e, i) => (
                       <g key={i}>
-                        <line x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} stroke="var(--edge)" strokeWidth={1.5} />
+                        <line
+                          x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+                          stroke={e.probabilistic ? "var(--signal)" : e.pathEdge ? "var(--ink)" : "var(--hairline)"}
+                          strokeWidth={e.pathEdge ? 2 : 1.2}
+                          strokeDasharray={e.probabilistic ? "6 4" : undefined}
+                        />
                         {e.label ? (
                           <text x={(e.x1 + e.x2) / 2} y={(e.y1 + e.y2) / 2 - 6} textAnchor="middle" fontSize={10} fill="var(--tertiary)">{e.label}</text>
                         ) : null}
@@ -228,9 +278,11 @@ export function WorkbenchView(props: Props) {
                   </svg>
                   <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11, color: "var(--tertiary)" }}>
                     <span><span style={{ color: "var(--ink)" }}>●</span> subject</span>
-                    <span><span style={{ color: "var(--slate-400)" }}>○</span> address</span>
+                    <span><span style={{ color: "var(--slate-400)" }}>○</span> peel</span>
+                    <span><span style={{ color: "var(--slate-400)" }}>○</span> sweep</span>
                     <span><span style={{ color: "var(--signal)" }}>●</span> mixer</span>
                     <span><span style={{ color: "var(--ink)" }}>◯</span> VASP</span>
+                    <span><span style={{ color: "var(--signal)" }}>┄</span> probabilistic</span>
                   </div>
                 </>
               )}

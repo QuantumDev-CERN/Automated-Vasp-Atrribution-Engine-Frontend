@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { Chrome } from "@/components/chrome/Chrome";
 import { PageError, Empty } from "@/components/state";
 import { WorkbenchView } from "@/components/workbench/WorkbenchView";
@@ -6,13 +7,6 @@ import { getCase } from "@/lib/api/cases";
 import { getGraphTopology, getGraphPath, getGraphStats, getCaseLinks, getInfrastructure } from "@/lib/api/graph";
 import { getJob, startTrace } from "@/lib/api/jobs";
 import { ApiError } from "@/lib/api/server";
-
-async function openWorkbench(formData: FormData) {
-  "use server";
-  const id = String(formData.get("case_id") ?? "").trim();
-  if (id) redirect(`/workbench?case=${encodeURIComponent(id)}`);
-}
-
 async function runTrace(formData: FormData) {
   "use server";
   const caseId = String(formData.get("case_id") ?? "");
@@ -38,13 +32,12 @@ export default async function WorkbenchPage({
       <Chrome crumb="Workbench">
         <div className="page-head">
           <h1 className="page-title">Trace workbench</h1>
-          <p className="page-sub">Open a case to inspect its traced graph</p>
+          <p className="page-sub">Pick a case to inspect its traced graph</p>
         </div>
-        <form action={openWorkbench} style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <input name="case_id" className="search-input" style={{ minWidth: 320 }} placeholder="Case ID" required />
-          <button type="submit" className="btn-secondary">Open</button>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <Link href="/cases" className="btn-primary">Browse cases</Link>
           <span className="endpoint-chip">GET /cases/{`{case_id}`}/graph</span>
-        </form>
+        </div>
       </Chrome>
     );
   }
