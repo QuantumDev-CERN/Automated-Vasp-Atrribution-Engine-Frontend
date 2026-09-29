@@ -8,6 +8,8 @@ export type GraphNode = {
   first_seen: string | null;
   degree: number;
   tags?: string[];
+  /** Mixer-pool info for depositor nodes (M37) — from the backend registry. */
+  pool?: { name: string; denomination: string; display: string } | null;
 };
 export type GraphEdge = {
   src: string;
@@ -94,8 +96,8 @@ export function getGraphPath(caseId: string) {
   return vasp.get<GraphPath>(`/cases/${caseId}/graph/path`);
 }
 
-export function getGraphStats(caseId: string) {
-  return vasp.get<GraphStats>(`/cases/${caseId}/graph/stats`);
+export function getGraphStats(caseId: string, days = 30) {
+  return vasp.get<GraphStats>(`/cases/${caseId}/graph/stats?days=${days}`);
 }
 
 /** Graph stats — GET /cases/{case_id}/graph/stats (M11, enriched M26 with

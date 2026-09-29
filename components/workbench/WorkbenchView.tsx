@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { PathHops } from "./PathHops";
 import { Empty } from "@/components/state";
 import { shortAddr, fmtDate, fmtNum } from "@/lib/format";
-import type { GraphTopology, GraphNode, GraphPath, GraphStats, CaseLinks, InfraPivot } from "@/lib/api/graph";
+import type { GraphTopology, GraphNode, GraphPath, PathHop, GraphStats, CaseLinks, InfraPivot } from "@/lib/api/graph";
 import type { TraceJob } from "@/lib/api/jobs";
 
 type Props = {
@@ -24,6 +24,39 @@ type Props = {
   runTrace: (formData: FormData) => void;
 };
 
+/** Display label for a selected node's kind — hop classification first
+ * (SVG §4: "Mixer deposit"), tag fallback for off-path context nodes. */
+function selectedKind(n: GraphNode, hop: PathHop | null | undefined, subject: string): string {
+  if (n.id === subject) return "Subject";
+  const map: Record<string, string> = {
+    "mixer-deposit": "Mixer deposit",
+    "peel": "Peel",
+    "sweep": "Sweep",
+    "direct": "Direct transfer",
+    "vasp-deposit": "VASP deposit",
+    "bridge": "Bridge",
+    "swap": "Swap",
+    "coinjoin": "CoinJoin",
+  };
+  if (hop?.kind && map[hop.kind]) return map[hop.kind];
+  return nodeKind(n, subject);
+}
+
+/** Honest structural assessment of a selected node — derived only from the
+ * persisted path/topology, never invented. */
+function nodeAssessment(n: GraphNode, hop: PathHop | null | undefined, path: GraphPath | null, subject: string): string {
+  const isTerminal = path != null && n.id === path.terminal;
+  if (n.id === subject) return "Trace origin — the wallet under investigation.";
+  if (isTerminal) {
+    if (hop?.kind === "mixer-deposit")
+      return "Terminal: probabilistic lead only, no deterministic onward trail.";
+    if (hop?.kind === "vasp-deposit")
+      return "Terminal attribution: the traced funds reached this VASP.";
+    return "Terminal node of the traced path.";
+  }
+  if (hop && path) return `Hop ${hop.hop} of ${path.hops.length - 1} on the subject → terminal path.`;
+  return "Context node — adjacent to, but not on, the attribution path.";
+}
 function nodeKind(n: GraphNode, subject: string): string {
   if (n.id === subject) return "Subject";
   const all = [...n.labels, ...(n.tags ?? [])].join(" ").toLowerCase();
@@ -278,6 +311,33 @@ export function WorkbenchView(props: Props) {
   const [showLabels, setShowLabels] = useState(true);
   const [showContext, setShowContext] = useState(true);
   const [panning, setPanning] = useState<{ sx: number; sy: number; vx: number; vy: number; z: number } | null>(null);
+  // Live-refetchable canvas data (M37): edge-count filter + activity range.
+  const [topology, setTopology] = useState(props.topology);
+  const [stats, setStats] = useState(props.stats);
+  const [edgeCount, setEdgeCount] = useState(2000);
+  const [activityDays, setActivityDays] = useState(30);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [loadingTopo, setLoadingTopo] = useState(false);
+  const [loadingStats, setLoadingStats] = useState(false);
+
+  const changeEdgeCount = async (n: number) => {
+    setEdgeCount(n); setFilterOpen(false);
+    if (n === edgeCount) return;
+    setLoadingTopo(true);
+    try {
+      const res = await fetch(`/api/v1/cases/${props.caseId}/graph?max_edges=${n}`);
+      if (res.ok) setTopology(await res.json());
+    } catch { /* keep current topology */ } finally { setLoadingTopo(false); }
+  };
+  const changeActivityDays = async (d: number) => {
+    setActivityDays(d);
+    if (d === activityDays) return;
+    setLoadingStats(true);
+    try {
+      const res = await fetch(`/api/v1/cases/${props.caseId}/graph/stats?days=${d}`);
+      if (res.ok) setStats(await res.json());
+    } catch { /* keep current stats */ } finally { setLoadingStats(false); }
+  };
 
   // Poll the trace job while it runs; refresh the canvas when it lands.
   useEffect(() => {
@@ -295,8 +355,8 @@ export function WorkbenchView(props: Props) {
   }, [props.jobId, liveJob, router]);
 
   const graph = useMemo(
-    () => (props.topology ? layout(props.topology, props.subject, props.path) : null),
-    [props.topology, props.subject, props.path]
+    () => (topology ? layout(topology, props.subject, props.path) : null),
+    [topology, props.subject, props.path]
   );
   const selectedNode = useMemo(
     () => graph?.placed.find((p) => p.node.id === selected)?.node ?? null,
@@ -322,6 +382,25 @@ export function WorkbenchView(props: Props) {
     };
   }, [graph, showContext, pathIds]);
   const [showGrid, setShowGrid] = useState(true);
+
+  // Graph-stats rows for the selected-node panel (SVG §4): Nodes / Edges
+  // from persisted stats + the classifier breakdown, in SVG order.
+  const statRows = useMemo<[string, number][]>(() => {
+    const rows: [string, number][] = [];
+    if (!stats) return rows;
+    const num = (v: unknown): number | null =>
+      typeof v === "number" && Number.isFinite(v) ? v : null;
+    const a = num((stats as Record<string, unknown>).addresses);
+    const t = num((stats as Record<string, unknown>).transfers);
+    if (a != null) rows.push(["Nodes", a]);
+    if (t != null) rows.push(["Edges", t]);
+    const bd = (stats.classifier_breakdown ?? {}) as Record<string, unknown>;
+    for (const [k, label] of [["peel", "Peel"], ["sweep", "Sweep"], ["mixer-deposit", "Mixer"], ["bridge", "Bridge"]] as const) {
+      const v = num(bd[k]);
+      if (v != null) rows.push([label, v]);
+    }
+    return rows;
+  }, [stats]);
 
   const zoomBy = (f: number) =>
     setView((v) => ({ ...v, z: Math.min(4, Math.max(0.5, v.z * f)) }));
@@ -358,8 +437,8 @@ export function WorkbenchView(props: Props) {
 
   const jobLine = liveJob
     ? `${liveJob.job_id.slice(0, 8)} · ${liveJob.status}`
-    : props.topology
-      ? `${fmtNum(props.topology.total_addresses)} nodes · ${fmtNum(props.topology.total_transfers)} edges`
+    : topology
+      ? `${fmtNum(topology.total_addresses)} nodes · ${fmtNum(topology.total_transfers)} edges`
       : "no graph yet";
 
   return (
@@ -371,7 +450,7 @@ export function WorkbenchView(props: Props) {
             <p className="page-sub">
               {jobLine}
               {liveJob?.error ? <span style={{ color: "var(--signal)" }}> · {liveJob.error}</span> : null}
-              {props.topology?.truncated ? <span> · path in view, {fmtNum(props.topology.total_addresses)} total</span> : null}
+              {topology?.truncated ? <span> · path in view, {fmtNum(topology.total_addresses)} total</span> : null}
             </p>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
@@ -468,7 +547,7 @@ export function WorkbenchView(props: Props) {
                     <span><span style={{ color: "var(--signal)" }}>┄</span> probabilistic</span>
                   </div>
                   <div style={{ position: "absolute", left: "50%", bottom: 10, transform: "translateX(-50%)", display: "flex", gap: 2, background: "#ffffff", border: "1px solid var(--hairline)", borderRadius: 999, padding: "4px 6px", boxShadow: "0 1px 4px rgba(20,24,43,0.08)" }}>
-                    <PillBtn title="Reset selection" onClick={() => setSelected(null)} active={false}>
+                    <PillBtn title="Select — click a node to inspect it; click again to clear" onClick={() => setSelected(null)} active={true}>
                       <path d="M4 3l7 14 2.5-6L20 8.5z" fill="none" strokeWidth="1.6" />
                     </PillBtn>
                     <PillBtn title="Fit view" onClick={resetView} active={false}>
@@ -477,9 +556,28 @@ export function WorkbenchView(props: Props) {
                     <PillBtn title={showLabels ? "Hide edge labels" : "Show edge labels"} onClick={() => setShowLabels((s) => !s)} active={showLabels}>
                       <path d="M10 14a4 4 0 005.7 0l2.8-2.8a4 4 0 00-5.7-5.7L11.5 6.7M14 10a4 4 0 00-5.7 0l-2.8 2.8a4 4 0 005.7 5.7l1.3-1.3" fill="none" strokeWidth="1.6" />
                     </PillBtn>
-                    <PillBtn title={showContext ? "Hide context nodes" : "Show context nodes"} onClick={() => setShowContext((s) => !s)} active={showContext}>
-                      <path d="M4 5h16l-6 7v6l-4 2v-8z" fill="none" strokeWidth="1.6" strokeLinejoin="round" />
-                    </PillBtn>
+                    <div style={{ position: "relative" }}>
+                      <PillBtn title="Edges in view — choose how many edges the canvas renders" onClick={() => setFilterOpen((o) => !o)} active={filterOpen}>
+                        <path d="M4 5h16l-6 7v6l-4 2v-8z" fill="none" strokeWidth="1.6" strokeLinejoin="round" />
+                      </PillBtn>
+                      {filterOpen ? (
+                        <div style={{ position: "absolute", bottom: 44, left: "50%", transform: "translateX(-50%)", background: "#ffffff", border: "1px solid var(--hairline)", borderRadius: 8, boxShadow: "0 4px 16px rgba(20,24,43,0.12)", padding: "10px 12px", minWidth: 190, zIndex: 20 }}>
+                          <div className="section-label" style={{ marginBottom: 8 }}>Edges in view</div>
+                          {[100, 250, 500, 1000, 2000].map((n) => (
+                            <label key={n} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "4px 0", cursor: "pointer", color: "var(--body)" }}>
+                              <input type="radio" name="edge-count" checked={edgeCount === n} onChange={() => changeEdgeCount(n)} />
+                              <span className="t-num">{fmtNum(n)}</span>
+                              {n === 2000 ? <span style={{ fontSize: 11, color: "var(--tertiary)" }}>(default)</span> : null}
+                            </label>
+                          ))}
+                          <div style={{ borderTop: "1px solid var(--hairline)", margin: "8px 0" }} />
+                          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", color: "var(--body)" }}>
+                            <input type="checkbox" checked={showContext} onChange={() => setShowContext((s) => !s)} />
+                            Show context nodes
+                          </label>
+                        </div>
+                      ) : null}
+                    </div>
                     <PillBtn title={showGrid ? "Hide grid" : "Show grid"} onClick={() => setShowGrid((s) => !s)} active={showGrid}>
                       <path d="M4 4h4v4H4zM10 4h4v4h-4zM16 4h4v4h-4zM4 10h4v4H4zM10 10h4v4h-4zM16 10h4v4h-4zM4 16h4v4H4zM10 16h4v4h-4zM16 16h4v4h-4z" fill="none" strokeWidth="1.2" />
                     </PillBtn>
@@ -489,11 +587,24 @@ export function WorkbenchView(props: Props) {
               )}
               <div style={{ marginTop: 20 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-                  <span className="section-label">Transaction activity · last 30 days</span>
+                  <span className="section-label">Transaction activity · {activityDays === 0 ? "lifetime" : `last ${activityDays} days`}</span>
+                  <select
+                    value={activityDays}
+                    onChange={(e) => changeActivityDays(Number(e.target.value))}
+                    aria-label="Activity range"
+                    disabled={loadingStats}
+                    style={{ fontSize: 12, padding: "4px 8px", border: "1px solid var(--hairline)", borderRadius: 6, background: "#fff", color: "var(--body)" }}
+                  >
+                    <option value={7}>Last 7 days</option>
+                    <option value={30}>Last 30 days</option>
+                    <option value={90}>Last 90 days</option>
+                    <option value={0}>Lifetime</option>
+                  </select>
                   <span className="endpoint-chip">GET /cases/{`{case_id}`}/graph/stats</span>
+                  {loadingStats ? <span style={{ fontSize: 12, color: "var(--tertiary)" }}>loading…</span> : null}
                 </div>
-                {(props.stats?.daily_activity ?? []).length ? (
-                  <ActivityBars days={props.stats!.daily_activity} />
+                {(stats?.daily_activity ?? []).length ? (
+                  <ActivityBars days={stats!.daily_activity} />
                 ) : (
                   <Empty title="No activity data" hint="Daily counts appear once the traced graph has timestamped edges." />
                 )}
@@ -506,66 +617,42 @@ export function WorkbenchView(props: Props) {
                 </div>
                 {selectedNode ? (
                   <>
-                  <dl className="kv" style={{ gridTemplateColumns: "110px 1fr" }}>
-                    <div className="kv-row"><dt>Address</dt><dd className="mono" style={{ wordBreak: "break-all" }} title={selectedNode.id}>{shortAddr(selectedNode.id)}</dd></div>
-                    <div className="kv-row"><dt>Kind</dt><dd>{nodeKind(selectedNode, props.subject)}</dd></div>
-                    {(selectedHop && selectedHop.confidence != null) ? (
-                      <div className="kv-row"><dt>Confidence</dt><dd className="t-num">{(selectedHop.confidence * 100).toFixed(1)}%</dd></div>
+                    <div className="section-label" style={{ margin: "0 0 4px" }}>Address</div>
+                    <div className="mono" style={{ fontSize: 13, wordBreak: "break-all", marginBottom: 12 }} title={selectedNode.id}>{shortAddr(selectedNode.id)}</div>
+                    <div className="section-label" style={{ margin: "0 0 4px" }}>Kind</div>
+                    <div style={{ fontSize: 13, marginBottom: 12 }}>{selectedKind(selectedNode, selectedHop, props.subject)}</div>
+                    {selectedNode.pool ? (
+                      <>
+                        <div className="section-label" style={{ margin: "0 0 4px" }}>Pool</div>
+                        <div style={{ fontSize: 13, marginBottom: 12 }}>{selectedNode.pool.display}</div>
+                      </>
                     ) : null}
-                    <div className="kv-row"><dt>Tags</dt><dd>{selectedNode.tags?.length ? selectedNode.tags.join(", ") : "—"}</dd></div>
-                    <div className="kv-row"><dt>Chains</dt><dd>{selectedNode.chains.join(", ") || "—"}</dd></div>
-                    <div className="kv-row"><dt>Degree</dt><dd>{selectedNode.degree}</dd></div>
-                    <div className="kv-row"><dt>First seen</dt><dd>{selectedNode.first_seen ? fmtDate(selectedNode.first_seen) : "—"}</dd></div>
-                  </dl>
-                  {(selectedHop && selectedHop.reason) ? (
-                    <p style={{ fontSize: 12, color: "var(--body)", margin: "8px 0 0" }}>{selectedHop.reason}</p>
-                  ) : null}
+                    <div className="section-label" style={{ margin: "0 0 4px" }}>Confidence</div>
+                    <div className="t-num" style={{ fontSize: 13, marginBottom: selectedHop?.reason ? 6 : 12 }}>
+                      {selectedHop?.confidence != null ? selectedHop.confidence.toFixed(2) : "—"}
+                    </div>
+                    {selectedHop?.reason ? (
+                      <p style={{ fontSize: 12, color: "var(--body)", margin: "0 0 12px" }}>{selectedHop.reason}</p>
+                    ) : null}
+                    <div className="section-label" style={{ margin: "0 0 4px" }}>Assessment</div>
+                    <p style={{ fontSize: 12, color: "var(--body)", margin: "0 0 16px" }}>
+                      {nodeAssessment(selectedNode, selectedHop, props.path, props.subject)}
+                    </p>
+                    <div className="section-label" style={{ margin: "0 0 8px" }}>Graph stats</div>
+                    <div style={{ border: "1px solid var(--hairline)", borderRadius: 6, overflow: "hidden" }}>
+                      {statRows.map(([label, value]) => (
+                        <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 12px", fontSize: 13, borderBottom: "1px solid var(--hairline)" }}>
+                          <span style={{ color: "var(--body)" }}>{label}</span>
+                          <span className="t-num">{fmtNum(value)}</span>
+                        </div>
+                      ))}
+                    </div>
                   </>
                 ) : (
                   <Empty title="No node selected" hint="Click a node on the canvas to inspect it." />
                 )}
               </div>
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-                  <span className="section-label">Graph stats</span>
-                  <span className="endpoint-chip">GET /cases/{`{case_id}`}/graph/stats</span>
-                </div>
-                {props.stats ? (
-                  <>
-                    <dl className="kv" style={{ gridTemplateColumns: "140px 1fr" }}>
-                      {Object.entries(props.stats)
-                        .filter(([k, v]) => k !== "case_id" && typeof v !== "object")
-                        .map(([k, v]) => (
-                          <div className="kv-row" key={k}>
-                            <dt>{k.replace(/_/g, " ")}</dt>
-                            <dd className="t-num">{typeof v === "number" ? fmtNum(v) : String(v)}</dd>
-                          </div>
-                        ))}
-                    </dl>
-                    {Object.keys(props.stats.classifier_breakdown ?? {}).length ? (
-                      <>
-                        <div className="section-label" style={{ margin: "16px 0 8px" }}>Classifier breakdown</div>
-                        <dl className="kv" style={{ gridTemplateColumns: "140px 1fr" }}>
-                          {Object.entries(props.stats.classifier_breakdown).map(([k, v]) => (
-                            <div className="kv-row" key={k}>
-                              <dt style={{ textTransform: "capitalize" }}>{k.replace(/-/g, " ")}</dt>
-                              <dd className="t-num">{v}</dd>
-                            </div>
-                          ))}
-                        </dl>
-                      </>
-                    ) : null}
-                    {(props.stats.daily_activity ?? []).length ? (
-                      <>
-                        <div className="section-label" style={{ margin: "16px 0 8px" }}>Daily activity · last 30 days</div>
-                        <ActivityBars days={props.stats.daily_activity} />
-                      </>
-                    ) : null}
-                  </>
-                ) : (
-                  <Empty title="Stats unavailable" hint="The stats endpoint did not respond." />
-                )}
-              </div>
+
             </div>
           </div>
         </>
