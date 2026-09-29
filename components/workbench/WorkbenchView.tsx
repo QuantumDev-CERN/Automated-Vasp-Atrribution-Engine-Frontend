@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PathHops } from "./PathHops";
 import { Empty } from "@/components/state";
@@ -52,6 +52,30 @@ function edgeLabel(e: { value?: string | null; value_denominated?: string | null
   return e.asset_symbol ? `${body} ${e.asset_symbol}` : body;
 }
 
+/** Edge geometry for the canvas: endpoints, label, styling flags, plus the
+ * shortened line end and filled polygon arrowhead (path + probabilistic). */
+type EdgeGeom = {
+  x1: number; y1: number; x2: number; y2: number;
+  src: string; dst: string;
+  label: string; probabilistic: boolean; pathEdge: boolean;
+  /** Line end (shortened for the arrowhead) + filled polygon arrowhead. */
+  lx: number; ly: number; head: string | null;
+};
+
+/** Arrowhead polygon for an edge, tip just outside the target node's ring. */
+function arrowhead(x1: number, y1: number, x2: number, y2: number, nodeR: number): { line: [number, number]; head: string } {
+  const dx = x2 - x1; const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len; const uy = dy / len;
+  const tipX = x2 - ux * (nodeR + 2); const tipY = y2 - uy * (nodeR + 2);
+  const baseX = tipX - ux * 9; const baseY = tipY - uy * 9;
+  const px = -uy * 4.2; const py = ux * 4.2;
+  return {
+    line: [baseX, baseY],
+    head: `${tipX},${tipY} ${baseX + px},${baseY + py} ${baseX - px},${baseY - py}`,
+  };
+}
+
 /** Path-first layout (per FRONTEND-SPEC §4.3): the attribution path is the
  * canvas. Path hops are laid left-to-right by hop index; a bounded set of
  * high-degree neighbours adds context. No degree-ranked hairball. */
@@ -59,7 +83,7 @@ function layout(
   topology: GraphTopology,
   subject: string,
   path: GraphPath | null
-): { placed: Placed[]; edges: { x1: number; y1: number; x2: number; y2: number; label: string; probabilistic: boolean; pathEdge: boolean }[]; total: number } {
+): { placed: Placed[]; edges: EdgeGeom[]; total: number } {
   const nodeById = new Map(topology.nodes.map((n) => [n.id, n]));
   const pathAddrs = (path?.hops ?? []).map((h) => h.address).filter((a) => nodeById.has(a));
   // Fallback when no path: subject + terminal + top-degree neighbours.
@@ -75,11 +99,17 @@ function layout(
     for (const n of [...topology.nodes].sort((a, b) => b.degree - a.degree).slice(0, 12)) push(n.id);
   }
   // Bounded context: up to 2 highest-degree neighbours per path node.
+  // Neighbours are undirected: an address that FUNDS a path node (incoming
+  // edge) is context too, not just onward (outgoing) neighbours.
   const adj = new Map<string, string[]>();
+  const link = (a: string, b: string) => {
+    if (!adj.has(a)) adj.set(a, []);
+    if (!adj.get(a)!.includes(b)) adj.get(a)!.push(b);
+  };
   for (const e of topology.edges) {
     if (!nodeById.has(e.src) || !nodeById.has(e.dst)) continue;
-    if (!adj.has(e.src)) adj.set(e.src, []);
-    adj.get(e.src)!.push(e.dst);
+    link(e.src, e.dst);
+    link(e.dst, e.src);
   }
   const pathSet = new Set(ordered.map((n) => n.id));
   for (const n of [...ordered]) {
@@ -110,7 +140,7 @@ function layout(
     const base = pos.get(anchor) ?? { x: W / 2, y: H / 2 };
     const k = Math.floor(ctxSlot / Math.max(1, pathAddrs.length));
     pos.set(n.id, {
-      x: Math.min(W - 60, Math.max(60, base.x + (k % 2 === 0 ? -1 : 1) * 90)),
+      x: Math.min(W - 60, Math.max(110, base.x + (k % 2 === 0 ? -1 : 1) * 90)),
       y: Math.min(H - 60, Math.max(60, base.y + (k < 2 ? 110 : -110))),
       pathEdge: false,
     });
@@ -120,52 +150,121 @@ function layout(
   for (const n of ordered) {
     if (!pos.has(n.id)) pos.set(n.id, { x: W / 2, y: H / 2, pathEdge: false });
   }
-  const placed = ordered.map((node) => ({ node, x: pos.get(node.id)!.x, y: pos.get(node.id)!.y, kind: nodeKind(node, subject) }));
+  const placed = ordered.map((node) => ({ node, x: pos.get(node.id)!.x, y: pos.get(node.id)!.y, kind: nodeKind(node, subject), labDir: "down" as Placed["labDir"] }));
   const kindById = new Map(placed.map((p) => [p.node.id, p.kind]));
   const pathPairs = new Set<string>();
   for (let i = 0; i + 1 < pathAddrs.length; i++) pathPairs.add(`${pathAddrs[i]}>${pathAddrs[i + 1]}`);
-  const edges: { x1: number; y1: number; x2: number; y2: number; label: string; probabilistic: boolean; pathEdge: boolean }[] = [];
+  const edges: EdgeGeom[] = [];
   for (const e of topology.edges) {
     const a = pos.get(e.src); const b = pos.get(e.dst);
     if (!a || !b) continue;
     const isPath = pathPairs.has(`${e.src}>${e.dst}`);
     const probabilistic = kindById.get(e.src) === "Mixer" && kindById.get(e.dst) === "VASP";
+    // Filled polygon arrowheads on path + probabilistic edges (spec §4.3).
+    // Target node radius matches the render loop below (7 for subject/VASP).
+    let lx = b.x; let ly = b.y; let head: string | null = null;
+    if (isPath || probabilistic) {
+      const dstKind = kindById.get(e.dst);
+      const r = dstKind === "Subject" || dstKind === "VASP" ? 7 : 6;
+      const ah = arrowhead(a.x, a.y, b.x, b.y, r);
+      lx = ah.line[0]; ly = ah.line[1]; head = ah.head;
+    }
     edges.push({
       x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+      src: e.src, dst: e.dst,
+      lx, ly, head,
       label: isPath ? edgeLabel(e) : "",
       probabilistic,
       pathEdge: isPath,
     });
     if (edges.length >= 200) break;
   }
+  // Label direction: put the kind+address block in the largest angular gap
+  // between incident edges, snapped to a cardinal (generalizes the SVG's
+  // hand-tuned label offsets, so edges never strike through labels).
+  const TWO_PI = Math.PI * 2;
+  for (const p of placed) {
+    const angs: number[] = [];
+    for (const e of edges) {
+      if (e.src === p.node.id) angs.push(Math.atan2(e.y2 - e.y1, e.x2 - e.x1));
+      else if (e.dst === p.node.id) angs.push(Math.atan2(e.y1 - e.y2, e.x1 - e.x2));
+    }
+    if (!angs.length) { p.labDir = "down"; continue; }
+    angs.sort((a, b) => a - b);
+    let bestMid = angs[0]; let bestGap = -1;
+    for (let i = 0; i < angs.length; i++) {
+      const a = angs[i];
+      const b = angs[(i + 1) % angs.length] + (i + 1 === angs.length ? TWO_PI : 0);
+      if (b - a > bestGap) { bestGap = b - a; bestMid = (a + b) / 2; }
+    }
+    const c = Math.cos(bestMid); const s = Math.sin(bestMid);
+    p.labDir = Math.abs(s) > Math.abs(c) ? (s < 0 ? "up" : "down") : (c < 0 ? "left" : "right");
+  }
   return { placed, edges, total: topology.total_addresses };
+}
+
+/** One icon button in the floating canvas-controls pill (spec §3.6). */
+function PillBtn({ title, onClick, active, children }: {
+  title: string; onClick: () => void; active: boolean; children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      style={{
+        width: 28, height: 28, display: "grid", placeItems: "center",
+        border: "none", borderRadius: 999, cursor: "pointer",
+        background: active ? "var(--wash)" : "transparent",
+        color: active ? "var(--ink)" : "var(--tertiary)",
+      }}
+    >
+      <svg width={16} height={16} viewBox="0 0 24 24" stroke="currentColor">{children}</svg>
+    </button>
+  );
 }
 
 /** Tiny bar chart for per-day transfer counts — data from the engine,
  * nothing fabricated. */
 function ActivityBars({ days }: { days: { date: string; transactions: number; transfers: number }[] }) {
   const max = Math.max(1, ...days.map((d) => d.transfers));
+  const peak = days.reduce((bi, d, i) => (d.transfers > (days[bi]?.transfers ?? -1) ? i : bi), 0);
+  const lab = (iso: string) => {
+    const d = new Date(iso + "T00:00:00Z");
+    return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  };
+  const idx = [0, Math.floor((days.length - 1) / 2), days.length - 1].filter((v, i, a) => a.indexOf(v) === i);
   return (
-    <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 72 }}>
-      {days.map((d) => (
-        <div
-          key={d.date}
-          title={`${d.date} — ${d.transactions} transactions, ${d.transfers} transfers`}
-          style={{
-            flex: 1, minWidth: 0,
-            height: `${Math.max(3, Math.round((d.transfers / max) * 72))}px`,
-            background: "var(--primary)",
-            opacity: d.transfers ? 1 : 0.25,
-          }}
-        />
-      ))}
+    <div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 72 }}>
+        {days.map((d, i) => (
+          <div
+            key={d.date}
+            title={`${d.date} — ${d.transactions} transactions, ${d.transfers} transfers`}
+            style={{
+              flex: 1, minWidth: 0,
+              height: `${Math.max(3, Math.round((d.transfers / max) * 72))}px`,
+              background: i === peak && d.transfers > 0 ? "var(--primary)" : "var(--hairline)",
+              opacity: d.transfers ? 1 : 0.35,
+            }}
+          />
+        ))}
+      </div>
+      <div style={{ display: "flex", marginTop: 6, fontSize: 10, color: "var(--tertiary)" }}>
+        {days.map((d, i) => (
+          <span key={d.date} style={{ flex: 1, minWidth: 0, textAlign: i === 0 ? "left" : i === days.length - 1 ? "right" : "center" }}>
+            {idx.includes(i) ? lab(d.date) : ""}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
 const W = 900;
 const H = 520;
 
-type Placed = { node: GraphNode; x: number; y: number; kind: string };
+type Placed = { node: GraphNode; x: number; y: number; kind: string; labDir: "up" | "down" | "left" | "right" };
 
 const TERMINAL = ["complete", "failed"];
 
@@ -174,6 +273,11 @@ export function WorkbenchView(props: Props) {
   const [tab, setTab] = useState<"graph" | "path">("graph");
   const [selected, setSelected] = useState<string | null>(null);
   const [liveJob, setLiveJob] = useState<TraceJob | null>(props.job);
+  // Canvas view: pan/zoom + display toggles (controls pill, spec §3.6).
+  const [view, setView] = useState({ x: 0, y: 0, z: 1 });
+  const [showLabels, setShowLabels] = useState(true);
+  const [showContext, setShowContext] = useState(true);
+  const [panning, setPanning] = useState<{ sx: number; sy: number; vx: number; vy: number; z: number } | null>(null);
 
   // Poll the trace job while it runs; refresh the canvas when it lands.
   useEffect(() => {
@@ -198,6 +302,59 @@ export function WorkbenchView(props: Props) {
     () => graph?.placed.find((p) => p.node.id === selected)?.node ?? null,
     [graph, selected]
   );
+  const selectedHop = useMemo(
+    () => props.path?.hops.find((h) => h.address === selected) ?? null,
+    [props.path, selected]
+  );
+  // Visible canvas subset: hiding context keeps the path; layout is stable.
+  const pathIds = useMemo(
+    () => new Set((props.path?.hops ?? []).map((h) => h.address)),
+    [props.path]
+  );
+  const visible = useMemo(() => {
+    if (!graph) return null;
+    if (showContext) return graph;
+    const keep = new Set(graph.placed.filter((p) => pathIds.has(p.node.id)).map((p) => p.node.id));
+    return {
+      ...graph,
+      placed: graph.placed.filter((p) => keep.has(p.node.id)),
+      edges: graph.edges.filter((e) => keep.has(e.src) && keep.has(e.dst)),
+    };
+  }, [graph, showContext, pathIds]);
+  const [showGrid, setShowGrid] = useState(true);
+
+  const zoomBy = (f: number) =>
+    setView((v) => ({ ...v, z: Math.min(4, Math.max(0.5, v.z * f)) }));
+  const resetView = () => { setView({ x: 0, y: 0, z: 1 }); setSelected(null); };
+  const svgRef = useRef<SVGSVGElement | null>(null);
+
+  // Wheel-zoom around the cursor; drag the background to pan.
+  // viewBox = (view.x, view.y, W/view.z, H/view.z).
+  const onWheel = (e: React.WheelEvent) => {
+    const svg = svgRef.current; if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    setView((v) => {
+      const z = Math.min(4, Math.max(0.5, v.z * f));
+      const k = z / v.z;
+      const vx = v.x + ((e.clientX - rect.left) / rect.width) * (W / v.z);
+      const vy = v.y + ((e.clientY - rect.top) / rect.height) * (H / v.z);
+      return { z, x: vx - (vx - v.x) / k, y: vy - (vy - v.y) / k };
+    });
+  };
+  const onMouseDown = (e: React.MouseEvent) => {
+    // Only pan from the background, not from a node.
+    if ((e.target as Element).closest?.("[data-node]")) return;
+    setPanning({ sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y, z: view.z });
+  };
+  const onMouseMove = (e: React.MouseEvent) => {
+    if (!panning || !svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const kx = (W / panning.z) / rect.width; const ky = (H / panning.z) / rect.height;
+    setView((v) => ({ ...v, x: panning.vx - (e.clientX - panning.sx) * kx, y: panning.vy - (e.clientY - panning.sy) * ky }));
+  };
+  const endPan = () => setPanning(null);
+  const vbW = W / view.z; const vbH = H / view.z;
 
   const jobLine = liveJob
     ? `${liveJob.job_id.slice(0, 8)} · ${liveJob.status}`
@@ -237,7 +394,7 @@ export function WorkbenchView(props: Props) {
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
             <span className="endpoint-chip">GET /cases/{`{case_id}`}/graph</span>
-            {graph ? <span style={{ fontSize: 12, color: "var(--tertiary)" }}>{graph.placed.length} of {fmtNum(graph.total)} nodes in view</span> : null}
+            {visible ? <span style={{ fontSize: 12, color: "var(--tertiary)" }}>{visible.placed.length} of {fmtNum(visible.total)} nodes in view</span> : null}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 24 }}>
             <div>
@@ -248,41 +405,85 @@ export function WorkbenchView(props: Props) {
                 />
               ) : (
                 <>
-                  <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 6 }} role="img" aria-label="Transaction graph">
-                    {graph.edges.map((e, i) => (
+                  <div style={{ position: "relative" }}>
+                  <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${vbW} ${vbH}`} style={{ width: "100%", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 6, cursor: panning ? "grabbing" : "grab", touchAction: "none" }} role="img" aria-label="Transaction graph"
+                    onWheel={onWheel} onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={endPan} onMouseLeave={endPan}>
+                    {showGrid ? (
+                      <defs>
+                        <pattern id="vbh-grid" width="28" height="28" patternUnits="userSpaceOnUse">
+                          <circle cx="1.5" cy="1.5" r="1.5" fill="var(--hairline)" />
+                        </pattern>
+                      </defs>
+                    ) : null}
+                    {showGrid ? <rect x={0} y={0} width={W} height={H} fill="url(#vbh-grid)" /> : null}
+                    <g transform={`translate(${view.x} ${view.y}) scale(${view.z})`}>
+                    {(visible?.edges ?? []).map((e, i) => (
                       <g key={i}>
                         <line
-                          x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+                          x1={e.x1} y1={e.y1} x2={e.lx} y2={e.ly}
                           stroke={e.probabilistic ? "var(--signal)" : e.pathEdge ? "var(--ink)" : "var(--hairline)"}
                           strokeWidth={e.pathEdge ? 2 : 1.2}
                           strokeDasharray={e.probabilistic ? "6 4" : undefined}
                         />
-                        {e.label ? (
-                          <text x={(e.x1 + e.x2) / 2} y={(e.y1 + e.y2) / 2 - 6} textAnchor="middle" fontSize={10} fill="var(--tertiary)">{e.label}</text>
+                        {e.head ? (
+                          <polygon
+                            points={e.head}
+                            fill={e.probabilistic ? "var(--signal)" : "var(--ink)"}
+                          />
+                        ) : null}
+                        {e.label && showLabels ? (
+                          <text x={(e.x1 + e.lx) / 2} y={(e.y1 + e.ly) / 2 - 6} textAnchor="middle" fontSize={10} fill="var(--tertiary)"
+                            stroke="#ffffff" strokeWidth={3} paintOrder="stroke" strokeLinejoin="round">{e.label}</text>
                         ) : null}
                       </g>
                     ))}
-                    {graph.placed.map((p) => {
+                    {(visible?.placed ?? []).map((p) => {
                       const isSel = selected === p.node.id;
                       const fill = p.kind === "Subject" ? "var(--ink)" : p.kind === "Mixer" ? "var(--signal)" : p.kind === "VASP" ? "var(--panel)" : "var(--panel)";
                       const stroke = p.kind === "VASP" ? "var(--ink)" : p.kind === "Mixer" ? "var(--signal)" : "var(--slate-400)";
+                      // Label block follows labDir so edges never strike through text.
+                      const lx = p.labDir === "left" ? p.x - 12 : p.labDir === "right" ? p.x + 12 : p.x;
+                      const anchor = p.labDir === "left" ? "end" : p.labDir === "right" ? "start" : "middle";
+                      const kindY = p.labDir === "up" ? p.y - 30 : p.labDir === "down" ? p.y + 18 : p.y - 2;
+                      const addrY = p.labDir === "up" ? p.y - 18 : p.labDir === "down" ? p.y + 30 : p.y + 12;
                       return (
-                        <g key={p.node.id} onClick={() => setSelected(p.node.id)} style={{ cursor: "pointer" }}>
+                        <g key={p.node.id} data-node onClick={() => setSelected(p.node.id)} style={{ cursor: "pointer" }}>
                           {isSel ? <circle cx={p.x} cy={p.y} r={13} fill="none" stroke="var(--primary)" strokeWidth={2} /> : null}
                           <circle cx={p.x} cy={p.y} r={p.kind === "Subject" || p.kind === "VASP" ? 7 : 6} fill={fill} stroke={stroke} strokeWidth={p.kind === "VASP" ? 2 : 1.7} />
-                          <text x={p.x} y={p.y - 14} textAnchor="middle" fontSize={10} fill="var(--tertiary)">{p.kind}</text>
-                          <text x={p.x} y={p.y + 24} textAnchor="middle" fontSize={10.5} fill="var(--ink)" fontFamily="var(--font-mono)">{shortAddr(p.node.id)}</text>
+                          <text x={lx} y={kindY} textAnchor={anchor} fontSize={10} fill="var(--tertiary)"
+                            stroke="#ffffff" strokeWidth={3} paintOrder="stroke" strokeLinejoin="round">{p.kind}</text>
+                          <text x={lx} y={addrY} textAnchor={anchor} fontSize={10.5} fill="var(--ink)" fontFamily="var(--font-mono)"
+                            stroke="#ffffff" strokeWidth={3} paintOrder="stroke" strokeLinejoin="round">{shortAddr(p.node.id)}</text>
                         </g>
                       );
                     })}
+                    </g>
                   </svg>
-                  <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11, color: "var(--tertiary)" }}>
+                  <div style={{ position: "absolute", left: 12, bottom: 10, display: "flex", gap: 14, fontSize: 11, color: "var(--tertiary)", background: "rgba(255,255,255,0.85)", padding: "2px 6px", borderRadius: 4 }}>
                     <span><span style={{ color: "var(--ink)" }}>●</span> subject</span>
                     <span><span style={{ color: "var(--slate-400)" }}>○</span> peel</span>
                     <span><span style={{ color: "var(--slate-400)" }}>○</span> sweep</span>
                     <span><span style={{ color: "var(--signal)" }}>●</span> mixer</span>
                     <span><span style={{ color: "var(--ink)" }}>◯</span> VASP</span>
                     <span><span style={{ color: "var(--signal)" }}>┄</span> probabilistic</span>
+                  </div>
+                  <div style={{ position: "absolute", left: "50%", bottom: 10, transform: "translateX(-50%)", display: "flex", gap: 2, background: "#ffffff", border: "1px solid var(--hairline)", borderRadius: 999, padding: "4px 6px", boxShadow: "0 1px 4px rgba(20,24,43,0.08)" }}>
+                    <PillBtn title="Reset selection" onClick={() => setSelected(null)} active={false}>
+                      <path d="M4 3l7 14 2.5-6L20 8.5z" fill="none" strokeWidth="1.6" />
+                    </PillBtn>
+                    <PillBtn title="Fit view" onClick={resetView} active={false}>
+                      <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" fill="none" strokeWidth="1.6" />
+                    </PillBtn>
+                    <PillBtn title={showLabels ? "Hide edge labels" : "Show edge labels"} onClick={() => setShowLabels((s) => !s)} active={showLabels}>
+                      <path d="M10 14a4 4 0 005.7 0l2.8-2.8a4 4 0 00-5.7-5.7L11.5 6.7M14 10a4 4 0 00-5.7 0l-2.8 2.8a4 4 0 005.7 5.7l1.3-1.3" fill="none" strokeWidth="1.6" />
+                    </PillBtn>
+                    <PillBtn title={showContext ? "Hide context nodes" : "Show context nodes"} onClick={() => setShowContext((s) => !s)} active={showContext}>
+                      <path d="M4 5h16l-6 7v6l-4 2v-8z" fill="none" strokeWidth="1.6" strokeLinejoin="round" />
+                    </PillBtn>
+                    <PillBtn title={showGrid ? "Hide grid" : "Show grid"} onClick={() => setShowGrid((s) => !s)} active={showGrid}>
+                      <path d="M4 4h4v4H4zM10 4h4v4h-4zM16 4h4v4h-4zM4 10h4v4H4zM10 10h4v4h-4zM16 10h4v4h-4zM4 16h4v4H4zM10 16h4v4h-4zM16 16h4v4h-4z" fill="none" strokeWidth="1.2" />
+                    </PillBtn>
+                  </div>
                   </div>
                 </>
               )}
@@ -304,15 +505,22 @@ export function WorkbenchView(props: Props) {
                   <span className="section-label">Selected node</span>
                 </div>
                 {selectedNode ? (
+                  <>
                   <dl className="kv" style={{ gridTemplateColumns: "110px 1fr" }}>
-                    <div className="kv-row"><dt>Address</dt><dd className="mono" style={{ wordBreak: "break-all" }}>{selectedNode.id}</dd></div>
+                    <div className="kv-row"><dt>Address</dt><dd className="mono" style={{ wordBreak: "break-all" }} title={selectedNode.id}>{shortAddr(selectedNode.id)}</dd></div>
                     <div className="kv-row"><dt>Kind</dt><dd>{nodeKind(selectedNode, props.subject)}</dd></div>
-                    <div className="kv-row"><dt>Labels</dt><dd>{selectedNode.labels.length ? selectedNode.labels.join(", ") : "—"}</dd></div>
+                    {(selectedHop && selectedHop.confidence != null) ? (
+                      <div className="kv-row"><dt>Confidence</dt><dd className="t-num">{(selectedHop.confidence * 100).toFixed(1)}%</dd></div>
+                    ) : null}
                     <div className="kv-row"><dt>Tags</dt><dd>{selectedNode.tags?.length ? selectedNode.tags.join(", ") : "—"}</dd></div>
                     <div className="kv-row"><dt>Chains</dt><dd>{selectedNode.chains.join(", ") || "—"}</dd></div>
                     <div className="kv-row"><dt>Degree</dt><dd>{selectedNode.degree}</dd></div>
                     <div className="kv-row"><dt>First seen</dt><dd>{selectedNode.first_seen ? fmtDate(selectedNode.first_seen) : "—"}</dd></div>
                   </dl>
+                  {(selectedHop && selectedHop.reason) ? (
+                    <p style={{ fontSize: 12, color: "var(--body)", margin: "8px 0 0" }}>{selectedHop.reason}</p>
+                  ) : null}
+                  </>
                 ) : (
                   <Empty title="No node selected" hint="Click a node on the canvas to inspect it." />
                 )}

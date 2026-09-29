@@ -3,6 +3,17 @@
 import { shortAddr, pct } from "@/lib/format";
 import type { PathHop } from "@/lib/api/graph";
 
+/** Prefer the human-denominated hop value (M34); fall back to raw. */
+function hopValue(h: PathHop): string {
+  const raw = h.value_denominated ?? h.value;
+  if (!raw || raw === "0") return "—";
+  const n = Number(raw);
+  const body = Number.isFinite(n)
+    ? n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : raw;
+  return h.asset_symbol ? `${body} ${h.asset_symbol}` : body;
+}
+
 /**
  * Vertical attribution-path timeline: kind label, address, classifier
  * reason, per-hop confidence. Rendered from GET /cases/{case_id}/graph/path.
@@ -35,7 +46,7 @@ export function PathHops({ hops }: { hops: PathHop[] }) {
               {h.reason ? <div style={{ fontSize: 12, color: "var(--body)", marginTop: 4 }}>{h.reason}</div> : null}
               <div style={{ fontSize: 11, color: "var(--tertiary)", marginTop: 4, display: "flex", gap: 12 }}>
                 {h.via_tx ? <span className="mono" title={h.via_tx}>via {shortAddr(h.via_tx)}</span> : null}
-                {h.value ? <span>{h.value} {h.asset_symbol ?? ""}</span> : null}
+                <span>{hopValue(h)}</span>
                 {h.block_time ? <span>{h.block_time.slice(0, 10)}</span> : null}
               </div>
             </div>
