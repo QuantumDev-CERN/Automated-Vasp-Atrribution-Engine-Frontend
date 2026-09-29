@@ -100,6 +100,35 @@ export function getGraphStats(caseId: string, days = 30) {
   return vasp.get<GraphStats>(`/cases/${caseId}/graph/stats?days=${days}`);
 }
 
+/** Recent transactions — GET /cases/{case_id}/graph/transactions (M39).
+ * Newest first, paginated; each item carries the classifier's edge stamps
+ * so the workbench can describe transactions in words. */
+export type GraphTransaction = {
+  tx_hash: string | null;
+  src: string;
+  dst: string;
+  chain: string | null;
+  value: string | number | null;
+  asset_symbol: string | null;
+  block_time: string | null;
+  kind: string | null;
+  confidence: number | null;
+  reason: string | null;
+};
+export type GraphTransactions = {
+  case_id: string;
+  total: number;
+  limit: number;
+  offset: number;
+  items: GraphTransaction[];
+};
+
+export function getRecentTransactions(caseId: string, limit = 4, offset = 0) {
+  return vasp.get<GraphTransactions>(
+    `/cases/${caseId}/graph/transactions?limit=${limit}&offset=${offset}`
+  );
+}
+
 /** Graph stats — GET /cases/{case_id}/graph/stats (M11, enriched M26 with
  * classifier breakdown + daily activity from persisted hop meta). */
 export type GraphStats = {

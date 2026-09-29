@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { PathHops } from "./PathHops";
 import { Empty } from "@/components/state";
 import { shortAddr, fmtDate, fmtNum } from "@/lib/format";
-import type { GraphTopology, GraphNode, GraphPath, PathHop, GraphStats, CaseLinks, InfraPivot } from "@/lib/api/graph";
+import type { GraphTopology, GraphNode, GraphPath, PathHop, GraphStats, GraphTransactions, GraphTransaction, CaseLinks, InfraPivot } from "@/lib/api/graph";
 import type { TraceJob } from "@/lib/api/jobs";
 
 type Props = {
@@ -260,37 +260,74 @@ function PillBtn({ title, onClick, active, children }: {
 
 /** Tiny bar chart for per-day transfer counts — data from the engine,
  * nothing fabricated. */
-function ActivityBars({ days }: { days: { date: string; transactions: number; transfers: number }[] }) {
-  const max = Math.max(1, ...days.map((d) => d.transfers));
-  const peak = days.reduce((bi, d, i) => (d.transfers > (days[bi]?.transfers ?? -1) ? i : bi), 0);
-  const lab = (iso: string) => {
-    const d = new Date(iso + "T00:00:00Z");
-    return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+/** Recent transactions, in words (M39): the newest transfers as cards,
+ * newest first, with pagination — replaces the bar chart. */
+const TX_PAGE = 4;
+function RecentTransactions({ caseId }: { caseId: string }) {
+  const [data, setData] = useState<GraphTransactions | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const load = async (off: number) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/v1/cases/${caseId}/graph/transactions?limit=${TX_PAGE}&offset=${off}`);
+      if (res.ok) { setData(await res.json()); setOffset(off); }
+    } catch { /* keep current page */ } finally { setLoading(false); }
   };
-  const idx = [0, Math.floor((days.length - 1) / 2), days.length - 1].filter((v, i, a) => a.indexOf(v) === i);
+  useEffect(() => { setData(null); setOffset(0); load(0); }, [caseId]);
+  const total = data?.total ?? 0;
+  const items = data?.items ?? [];
+  const from = total === 0 ? 0 : offset + 1;
+  const to = Math.min(offset + TX_PAGE, total);
+  const kindLabel = (k: string | null) =>
+    k ? k.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ") : null;
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 72 }}>
-        {days.map((d, i) => (
-          <div
-            key={d.date}
-            title={`${d.date} — ${d.transactions} transactions, ${d.transfers} transfers`}
-            style={{
-              flex: 1, minWidth: 0,
-              height: `${Math.max(3, Math.round((d.transfers / max) * 72))}px`,
-              background: i === peak && d.transfers > 0 ? "var(--primary)" : "var(--hairline)",
-              opacity: d.transfers ? 1 : 0.35,
-            }}
-          />
-        ))}
-      </div>
-      <div style={{ display: "flex", marginTop: 6, fontSize: 10, color: "var(--tertiary)" }}>
-        {days.map((d, i) => (
-          <span key={d.date} style={{ flex: 1, minWidth: 0, textAlign: i === 0 ? "left" : i === days.length - 1 ? "right" : "center" }}>
-            {idx.includes(i) ? lab(d.date) : ""}
+      {items.map((t, i) => {
+        const kl = kindLabel(t.kind);
+        return (
+          <div key={`${t.tx_hash ?? "notx"}-${t.src}-${t.dst}-${i}`} style={{ border: "1px solid var(--hairline)", borderRadius: 8, padding: "10px 12px", marginBottom: 8, background: "#fff" }}>
+            <div className="mono" style={{ fontSize: 12 }} title={`${t.src} → ${t.dst}`}>
+              {shortAddr(t.src)} <span style={{ color: "var(--tertiary)" }}>→</span> {shortAddr(t.dst)}
+            </div>
+            <div style={{ fontSize: 12, color: "var(--body)", marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span className="t-num">{t.value ?? "—"}{t.asset_symbol ? ` ${t.asset_symbol}` : ""}</span>
+              <span style={{ color: "var(--tertiary)" }}>·</span>
+              <span>{fmtDate(t.block_time)}</span>
+              {kl ? (
+                <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 999, background: "var(--wash)", color: "var(--body)" }}>
+                  {kl}{t.confidence != null ? ` · ${t.confidence.toFixed(2)}` : ""}
+                </span>
+              ) : null}
+            </div>
+            {t.reason ? (
+              <div style={{ fontSize: 11, color: "var(--tertiary)", marginTop: 4 }}>{t.reason}</div>
+            ) : null}
+          </div>
+        );
+      })}
+      {!loading && items.length === 0 ? (
+        <Empty title="No transactions" hint="Transfers appear once the traced graph has timestamped edges." />
+      ) : null}
+      {total > 0 ? (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
+          <span style={{ fontSize: 12, color: "var(--tertiary)" }} className="t-num">
+            Showing {from}–{to} of {fmtNum(total)}
           </span>
-        ))}
-      </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => load(offset - TX_PAGE)}
+              disabled={loading || offset === 0}
+              style={{ fontSize: 12, padding: "4px 10px", border: "1px solid var(--hairline)", borderRadius: 6, background: "#fff", cursor: offset === 0 ? "default" : "pointer", opacity: offset === 0 ? 0.4 : 1 }}
+            >‹ Prev</button>
+            <button
+              onClick={() => load(offset + TX_PAGE)}
+              disabled={loading || offset + TX_PAGE >= total}
+              style={{ fontSize: 12, padding: "4px 10px", border: "1px solid var(--hairline)", borderRadius: 6, background: "#fff", cursor: offset + TX_PAGE >= total ? "default" : "pointer", opacity: offset + TX_PAGE >= total ? 0.4 : 1 }}
+            >Next ›</button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -311,14 +348,12 @@ export function WorkbenchView(props: Props) {
   const [showLabels, setShowLabels] = useState(true);
   const [showContext, setShowContext] = useState(true);
   const [panning, setPanning] = useState<{ sx: number; sy: number; vx: number; vy: number; z: number } | null>(null);
-  // Live-refetchable canvas data (M37): edge-count filter + activity range.
+  // Live-refetchable canvas data (M37): edge-count filter.
   const [topology, setTopology] = useState(props.topology);
-  const [stats, setStats] = useState(props.stats);
+  const [stats] = useState(props.stats);
   const [edgeCount, setEdgeCount] = useState(2000);
-  const [activityDays, setActivityDays] = useState(30);
   const [filterOpen, setFilterOpen] = useState(false);
   const [loadingTopo, setLoadingTopo] = useState(false);
-  const [loadingStats, setLoadingStats] = useState(false);
 
   const changeEdgeCount = async (n: number) => {
     setEdgeCount(n); setFilterOpen(false);
@@ -328,15 +363,6 @@ export function WorkbenchView(props: Props) {
       const res = await fetch(`/api/v1/cases/${props.caseId}/graph?max_edges=${n}`);
       if (res.ok) setTopology(await res.json());
     } catch { /* keep current topology */ } finally { setLoadingTopo(false); }
-  };
-  const changeActivityDays = async (d: number) => {
-    setActivityDays(d);
-    if (d === activityDays) return;
-    setLoadingStats(true);
-    try {
-      const res = await fetch(`/api/v1/cases/${props.caseId}/graph/stats?days=${d}`);
-      if (res.ok) setStats(await res.json());
-    } catch { /* keep current stats */ } finally { setLoadingStats(false); }
   };
 
   // Poll the trace job while it runs; refresh the canvas when it lands.
@@ -587,27 +613,10 @@ export function WorkbenchView(props: Props) {
               )}
               <div style={{ marginTop: 20 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-                  <span className="section-label">Transaction activity · {activityDays === 0 ? "lifetime" : `last ${activityDays} days`}</span>
-                  <select
-                    value={activityDays}
-                    onChange={(e) => changeActivityDays(Number(e.target.value))}
-                    aria-label="Activity range"
-                    disabled={loadingStats}
-                    style={{ fontSize: 12, padding: "4px 8px", border: "1px solid var(--hairline)", borderRadius: 6, background: "#fff", color: "var(--body)" }}
-                  >
-                    <option value={7}>Last 7 days</option>
-                    <option value={30}>Last 30 days</option>
-                    <option value={90}>Last 90 days</option>
-                    <option value={0}>Lifetime</option>
-                  </select>
-                  <span className="endpoint-chip">GET /cases/{`{case_id}`}/graph/stats</span>
-                  {loadingStats ? <span style={{ fontSize: 12, color: "var(--tertiary)" }}>loading…</span> : null}
+                  <span className="section-label">Transaction activity</span>
+                  <span className="endpoint-chip">GET /cases/{`{case_id}`}/graph/transactions</span>
                 </div>
-                {(stats?.daily_activity ?? []).length ? (
-                  <ActivityBars days={stats!.daily_activity} />
-                ) : (
-                  <Empty title="No activity data" hint="Daily counts appear once the traced graph has timestamped edges." />
-                )}
+                <RecentTransactions caseId={props.caseId} />
               </div>
             </div>
             <div>
@@ -639,14 +648,15 @@ export function WorkbenchView(props: Props) {
                       {nodeAssessment(selectedNode, selectedHop, props.path, props.subject)}
                     </p>
                     <div className="section-label" style={{ margin: "0 0 8px" }}>Graph stats</div>
-                    <div style={{ border: "1px solid var(--hairline)", borderRadius: 6, overflow: "hidden" }}>
-                      {statRows.map(([label, value]) => (
-                        <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 12px", fontSize: 13, borderBottom: "1px solid var(--hairline)" }}>
-                          <span style={{ color: "var(--body)" }}>{label}</span>
-                          <span className="t-num">{fmtNum(value)}</span>
-                        </div>
-                      ))}
+                    <div style={{ marginBottom: 6 }}>
+                      <span className="endpoint-chip">GET /cases/{`{case_id}`}/graph/stats</span>
                     </div>
+                    {statRows.map(([label, value]) => (
+                      <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", fontSize: 13 }}>
+                        <span style={{ color: "var(--body)" }}>{label}</span>
+                        <span className="t-num">{fmtNum(value)}</span>
+                      </div>
+                    ))}
                   </>
                 ) : (
                   <Empty title="No node selected" hint="Click a node on the canvas to inspect it." />
